@@ -33,9 +33,16 @@ import numpy as np
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
-IMAGENET_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_STD = (0.229, 0.224, 0.225)
-IMAGE_SIZE = 224
+# Sourced from the shared contract so training and serving cannot disagree.
+from ml.contract import (  # noqa: E402
+    DEFAULT_CENTER_CROP,
+    DEFAULT_RESIZE,
+    IMAGENET_MEAN,
+    IMAGENET_STD,
+    RESIZE_RATIO,
+)
+
+IMAGE_SIZE = DEFAULT_CENTER_CROP
 
 DOMAIN_STUDIO = "plantvillage"
 DOMAIN_FIELD = "plantdoc"
@@ -410,7 +417,11 @@ def build_eval_transform(image_size: int = IMAGE_SIZE):
     import albumentations as A
     from albumentations.pytorch import ToTensorV2
 
-    resize_to = int(round(image_size * 1.14))
+    resize_to = (
+        DEFAULT_RESIZE
+        if image_size == DEFAULT_CENTER_CROP
+        else int(round(image_size * RESIZE_RATIO))
+    )
     return A.Compose([
         A.SmallestMaxSize(max_size=resize_to),
         A.CenterCrop(height=image_size, width=image_size),

@@ -1,8 +1,8 @@
-# Run from backend/:
-#   docker compose up --build
+# Run from the repo root:
+#   docker compose -f backend/docker-compose.yml up --build
 #
-# backend/ is self-contained (predict.py / data.py are vendored in), so the
-# build context is backend/ itself.
+# Build context is the repo root because the image needs the ml/ package
+# alongside backend/.
 
 services:
   redis:
@@ -17,8 +17,8 @@ services:
 
   api:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     env_file:
@@ -37,8 +37,8 @@ services:
 
   worker:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: backend/Dockerfile
     env_file:
       - .env
     environment:

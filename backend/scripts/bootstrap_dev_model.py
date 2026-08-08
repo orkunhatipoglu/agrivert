@@ -27,7 +27,7 @@ Replace it with a real version the moment you have one:
     rm -rf models/v0-dev-untrained-*
 
 `--threshold 0` is available for frontend work: with random weights the top
-confidence sits near 1/38, so at the honest 0.95 threshold every diagnosis
+confidence sits near 1/len(classes), so at the honest 0.95 threshold every diagnosis
 comes back `uncertain` and the `completed` UI path never renders.
 """
 
@@ -67,17 +67,15 @@ def main() -> int:
     settings = get_settings()
     sys.path.insert(0, str(Path(settings.ml_repo_root).resolve()))
 
-    import torch  # noqa: E402  (imported late: it is a ~2s import)
-
-    from data import (  # noqa: E402
+    from ml.contract import (  # noqa: E402
         DEFAULT_CENTER_CROP,
         DEFAULT_RESIZE,
         IMAGENET_MEAN,
         IMAGENET_STD,
-        PLANTVILLAGE_CLASSES,
         build_label_map,
     )
-    from predict import _build_backbone  # noqa: E402
+    from ml.model import build_backbone, save_checkpoint  # noqa: E402
+    from ml.taxonomy import VERTICAL_CLASSES  # noqa: E402
 
     dest = Path(settings.model_registry_dir) / args.version
     if dest.exists() and not args.force:
@@ -85,9 +83,12 @@ def main() -> int:
         return 1
     dest.mkdir(parents=True, exist_ok=True)
 
-    classes = list(PLANTVILLAGE_CLASSES)
-    model = _build_backbone(args.architecture, len(classes))
-    torch.save(model.state_dict(), dest / "best.pt")
+    classes = list(VERTICAL_CLASSES)
+    model = build_backbone(args.architecture, len(classes))
+    # save_checkpoint writes the {"model": state_dict} shape the serving
+    # loader expects. Saving a bare state_dict here is what previously made
+    # the placeholder unloadable.
+    save_checkpoint(dest / "best.pt", model, untrained=True)
 
     metadata = {
         "model_name": "agrivert-dev-placeholder",

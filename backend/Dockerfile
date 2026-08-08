@@ -2,10 +2,9 @@
 # command, and keeping one image guarantees the worker's preprocessing matches
 # what the API validated against.
 #
-# backend/ is self-contained (predict.py and data.py are vendored in — see
-# backend/README.md on why), so build from backend/ itself:
-#   docker build -f Dockerfile -t agrivert-backend .   (run from backend/)
-#   docker build -f backend/Dockerfile -t agrivert-backend backend   (from repo root)
+# The image needs both backend/ and the ml/ package (serving imports
+# ml.predict), so build from the REPO ROOT:
+#   docker build -f backend/Dockerfile -t agrivert-backend .
 
 FROM python:3.11-slim
 
@@ -27,15 +26,17 @@ WORKDIR /srv/backend
 RUN pip install --index-url https://download.pytorch.org/whl/cu124 \
         torch>=2.4 torchvision>=0.19
 
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install -r requirements.txt
 
-# predict.py and data.py included via this COPY — they live in backend/
-# alongside app/, not at a separate repo root.
-COPY . .
+# The shared training/serving code. Serving imports ml.predict, which imports
+# ml.data, so preprocessing IS the training preprocessing — not a copy.
+COPY ml/ /srv/ml/
+COPY backend/ /srv/backend/
 
 ENV MODEL_REGISTRY_DIR=/srv/backend/models \
-    PYTHONPATH=/srv/backend
+    ML_REPO_ROOT=/srv \
+    PYTHONPATH=/srv:/srv/backend
 
 EXPOSE 8000
 

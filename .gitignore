@@ -2,3 +2,13 @@
 .run/
 
 .DS_Store
+
+# Local training outputs and environments (models ship as bundles,
+# not in git — see ml/README.md).
+venv/
+artifacts/
+*.tar.gz
+dist/
+__pycache__/
+.cache/
+.claude/

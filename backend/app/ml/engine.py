@@ -29,7 +29,7 @@ _lock = threading.Lock()
 
 
 def _ensure_ml_repo_importable() -> None:
-    """Put the ML repo root on sys.path so `predict` and `data` import."""
+    """Put the repo root on sys.path so the `ml` package imports."""
     root = str(Path(get_settings().ml_repo_root).resolve())
     if root not in sys.path:
         sys.path.insert(0, root)
@@ -51,12 +51,12 @@ def load_classifier(version: ModelVersion):
 
         _ensure_ml_repo_importable()
         try:
-            from predict import DiseaseClassifier
+            from ml.predict import DiseaseClassifier
         except ImportError as exc:  # pragma: no cover - environment problem
             raise RuntimeError(
-                "could not import predict.DiseaseClassifier from "
-                f"{get_settings().ml_repo_root}. Is ML_REPO_ROOT correct and are "
-                "torch/albumentations installed?"
+                "could not import ml.predict.DiseaseClassifier from "
+                f"{get_settings().ml_repo_root}. Is ML_REPO_ROOT set to the repo "
+                "root and are torch/albumentations installed?"
             ) from exc
 
         log.info("loading model version %s from %s", version.version, version.path)

@@ -26,9 +26,10 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torchvision.models import mobilenet_v2
 
-import data as D
+from ml import data as D
+from ml.contract import build_label_map  # noqa: F401  (re-exported for callers)
+from ml.model import build_backbone, load_checkpoint_into
 
 
 class DiseaseClassifier:
@@ -47,14 +48,9 @@ class DiseaseClassifier:
         self.transform = D.build_eval_transform(pre["center_crop"])
 
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        model = mobilenet_v2(weights=None)
-        in_features = model.classifier[1].in_features
-        model.classifier = torch.nn.Sequential(
-            torch.nn.Dropout(p=0.3),
-            torch.nn.Linear(in_features, len(self.classes)),
-        )
-        ckpt = torch.load(self.dir / "best.pt", map_location="cpu", weights_only=False)
-        model.load_state_dict(ckpt["model"])
+        architecture = self.metadata.get("architecture", "mobilenet_v2")
+        model = build_backbone(architecture, len(self.classes))
+        load_checkpoint_into(model, self.dir / "best.pt")
         self.model = model.eval().to(self.device)
 
     def _to_array(self, image) -> np.ndarray:

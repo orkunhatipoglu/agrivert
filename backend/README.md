@@ -3,9 +3,7 @@
 FastAPI + Celery + Redis + Firebase. Implements the routes planned in the
 `agrivert-ml` project's `ROUTES.md`, against the model trained by that same
 project (see its `project_context.md` for the training pipeline this backend
-consumes). `predict.py` and `data.py` here are vendored, byte-identical
-copies from that repo — this `backend/` directory is self-contained and
-buildable on its own.
+consumes). Serving code is imported from the repo's `ml/` package, not copied here.
 
 ## What is and isn't implemented
 
@@ -56,19 +54,15 @@ importing it guarantees serving preprocessing is byte-identical to training.
 Reimplementing resize/crop/normalize here would reintroduce exactly the
 train/serve drift `project_context.md` §2.7 warns about.
 
-`predict.py` and `data.py` are **vendored into this directory** rather than
-imported from a sibling repo path — the training project (`agrivert-ml`) and
-this backend are pushed to different places (the training repo is not on
-GitHub; this backend is), so a cross-repo relative path would only work on
-one machine. `ML_REPO_ROOT` (`app/config.py`) defaults to `backend/` itself;
-override it only if you relocate these files.
+They are the **same modules**, imported from `ml/` at the repo root —
+not copies. `ML_REPO_ROOT` (`app/config.py`) points at the repo root and
+defaults correctly; the Dockerfile copies `ml/` into the image.
 
-**Keeping them in sync is manual.** When the training pipeline changes
-`predict.py` or `data.py` — especially `build_eval_transform`, since serving
-must match training exactly — copy the updated files into `backend/` again.
-Nothing currently automates or checks this; a staleness check (e.g. comparing
-file hashes at startup) would be a reasonable thing to add if the two drift
-in practice.
+This replaced vendored copies under `backend/`. Those drifted from the
+originals and produced an `ImportError` on a teammate's first run for three
+names that had never existed anywhere. `ml/contract.py` now owns every
+constant both sides need, and `tests/test_contract.py` fails if they split
+apart again.
 
 ### Model modularity
 
@@ -93,7 +87,12 @@ pip install -r requirements.txt
 
 # Path to the artifacts/ dir is wherever your training run's output lives —
 # adjust if this isn't checked out next to the agrivert-ml project.
-python scripts/register_model.py /path/to/agrivert-ml/artifacts --version v1-blended-20260808 --activate
+# Preferred: install a published model bundle (no training required)
+python -m ml.bundle fetch <bundle-url> --into models --sha256 <hash>
+
+# Or register a local artifacts dir you trained yourself
+python scripts/register_model.py ../artifacts/vertical --version v2-vertical-20260809 --activate
+
 python scripts/seed_diseases.py
 ```
 
@@ -142,11 +141,6 @@ auth.set_custom_user_claims(uid, {"admin": True})
 
 ## Known gaps / decisions to revisit
 
-- **`predict.py`/`data.py` are vendored copies, not a shared package.** They
-  must be re-copied from `agrivert-ml` after any change there, especially to
-  `build_eval_transform`. `scripts/check_vendored.py <agrivert-ml-path>`
-  compares them by hash and can `--update` in place; run it after pulling
-  training changes.
 - **The disease KB ships empty.** `seed_diseases.py` creates a document per
   class with blank `description`/`symptoms`/`treatment` and
   `content_reviewed: false`. This is deliberate: that text is what a farmer

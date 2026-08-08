@@ -62,12 +62,10 @@ class Settings(BaseSettings):
     model_registry_dir: Path = BACKEND_DIR / "models"
     # Fallback when Firestore has no active version recorded (local dev).
     default_model_version: str | None = None
-    # Where predict.py / data.py live. They are vendored into backend/ (kept
-    # byte-identical to the training repo's copies) so the backend imports
-    # the *training* preprocessing rather than reimplementing it — serving
-    # cannot drift from training (project_context.md §2.7). Override only if
-    # you relocate them.
-    ml_repo_root: Path = BACKEND_DIR
+    # Repo root, which must contain the `ml/` package. The backend imports
+    # ml.predict (which imports ml.data) so serving preprocessing IS the
+    # training preprocessing — the same objects, not a copy that can drift.
+    ml_repo_root: Path = BACKEND_DIR.parent
     inference_device: str | None = None  # None => cuda if available, else cpu
 
     # --- Upload validation (ROUTES.md flaw #2) --------------------------

@@ -46,28 +46,48 @@ not safely repeatable:
 
 Service logs land in `.run/logs/`, pids in `.run/`.
 
+### Getting a real model (do this instead of training)
+
+Training needs a GPU, ~10GB of datasets and hours. **Nobody but the person
+who trains it should do that.** Everyone else installs the published bundle:
+
+```bash
+python -m ml.bundle fetch <bundle-url> --into backend/models --sha256 <hash>
+```
+
+It verifies the archive hash and every file inside it, then installs a model
+version the backend resolves immediately. Ask whoever trained it for the URL
+and hash, or take them from the repo's Releases page.
+
 ### The placeholder model
 
-If `backend/models/` is empty, `start.sh` runs
-`scripts/bootstrap_dev_model.py`. Its weights are random — every verdict is
-noise, and the version is named `v0-dev-untrained-*` so it cannot be mistaken
-for a trained one. At the honest 0.95 confidence threshold an untrained model
-returns `uncertain` every single time, so for frontend work on the
-`completed` path:
+If `backend/models/` is empty and no bundle has been fetched, `start.sh` runs
+`backend/scripts/bootstrap_dev_model.py`. Its weights are random — every
+verdict is noise, and the version is named `v0-dev-untrained-*` so it cannot
+be mistaken for a trained one. At the honest 0.95 confidence threshold an
+untrained model returns `uncertain` every single time, so for frontend work
+on the `completed` path:
 
 ```bash
 ./start.sh --model-threshold 0
-```
-
-Replace it with real weights as soon as you have them:
-
-```bash
-backend/.venv/bin/python backend/scripts/register_model.py <artifacts-dir> \
-    --version v1-blended-20260808 --activate
 ```
 
 ## Manual operation
 
 `start.sh` is a convenience, not a dependency — everything it does can be run
 by hand. See `backend/README.md` for the three-terminal (or
-`docker compose up`) workflow and `frontend/README.md` for `npm run dev`.
+`docker compose up`) workflow, `frontend/README.md` for `npm run dev`, and
+`ml/README.md` for training and model distribution.
+
+## Layout
+
+```
+ml/         training + the shared training/serving contract (ml/README.md)
+backend/    FastAPI + Celery, imports ml/ directly (backend/README.md)
+frontend/   Next.js client (frontend/README.md)
+```
+
+`ml/` is imported by the backend rather than copied into it. An earlier
+arrangement kept vendored copies of `predict.py` and `data.py` under
+`backend/`; they drifted, and a teammate's first run died on an `ImportError`
+for names that had never existed. See `ml/README.md` for the postmortem.
