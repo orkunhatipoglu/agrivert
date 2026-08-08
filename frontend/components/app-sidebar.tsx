@@ -3,7 +3,6 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
-  BellIcon,
   BookOpenIcon,
   CpuIcon,
   HistoryIcon,
@@ -40,7 +39,6 @@ const MONITOR = [
 
 const MANAGE = [
   { href: "/farms", label: "Farms & plots", icon: SproutIcon },
-  { href: "/notifications", label: "Alerts", icon: BellIcon },
   { href: "/account", label: "Account", icon: UserIcon },
 ]
 

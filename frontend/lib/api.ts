@@ -21,9 +21,9 @@ import type {
   FarmList,
   FeedbackRequest,
   FeedbackResponse,
+  GeoPoint,
   HealthResponse,
   ModelVersionList,
-  NotificationList,
   Plot,
   PlotList,
   UserProfile,
@@ -325,19 +325,33 @@ export const diseasesApi = {
     request<Disease>(`/diseases/${encodeURIComponent(id)}`),
 }
 
-// --- Farms & plots (backend returns 501) ----------------------------------
+// --- Farms & plots --------------------------------------------------------
+
+/**
+ * Write bodies are spelled out rather than `Partial<Farm>` so server-owned
+ * fields (`farmId`, `ownerUid`, `createdAt`) can't be sent in a PATCH. The
+ * API ignores unknown keys, but the type is the place to catch it.
+ */
+export interface FarmWrite {
+  name?: string
+  region?: string | null
+  location?: GeoPoint | null
+}
+
+export interface PlotWrite {
+  name?: string
+  cropType?: string
+  areaHectares?: number | null
+  location?: GeoPoint | null
+}
 
 export const farmsApi = {
   list: (): Promise<FarmList> => request<FarmList>("/farms"),
-  create: (body: {
-    name: string
-    region?: string
-    location?: { latitude: number; longitude: number }
-  }): Promise<Farm> =>
+  create: (body: FarmWrite & { name: string }): Promise<Farm> =>
     request<Farm>("/farms", { method: "POST", ...jsonBody(body) }),
   get: (farmId: string): Promise<Farm> =>
     request<Farm>(`/farms/${encodeURIComponent(farmId)}`),
-  update: (farmId: string, body: Partial<Farm>): Promise<Farm> =>
+  update: (farmId: string, body: FarmWrite): Promise<Farm> =>
     request<Farm>(`/farms/${encodeURIComponent(farmId)}`, {
       method: "PATCH",
       ...jsonBody(body),
@@ -349,17 +363,13 @@ export const farmsApi = {
     request<PlotList>(`/farms/${encodeURIComponent(farmId)}/plots`),
   createPlot: (
     farmId: string,
-    body: { name: string; cropType: string; areaHectares?: number }
+    body: PlotWrite & { name: string; cropType: string }
   ): Promise<Plot> =>
     request<Plot>(`/farms/${encodeURIComponent(farmId)}/plots`, {
       method: "POST",
       ...jsonBody(body),
     }),
-  updatePlot: (
-    farmId: string,
-    plotId: string,
-    body: Partial<Plot>
-  ): Promise<Plot> =>
+  updatePlot: (farmId: string, plotId: string, body: PlotWrite): Promise<Plot> =>
     request<Plot>(
       `/farms/${encodeURIComponent(farmId)}/plots/${encodeURIComponent(plotId)}`,
       { method: "PATCH", ...jsonBody(body) }
@@ -369,18 +379,6 @@ export const farmsApi = {
       `/farms/${encodeURIComponent(farmId)}/plots/${encodeURIComponent(plotId)}`,
       { method: "DELETE" }
     ),
-}
-
-// --- Notifications (backend returns 501) ----------------------------------
-
-export const notificationsApi = {
-  list: (): Promise<NotificationList> =>
-    request<NotificationList>("/notifications"),
-  subscribe: (body: { region?: string; fcmToken?: string }): Promise<void> =>
-    request<void>("/notifications/subscribe", {
-      method: "POST",
-      ...jsonBody(body),
-    }),
 }
 
 // --- Admin ----------------------------------------------------------------

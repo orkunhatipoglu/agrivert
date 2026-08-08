@@ -12,15 +12,20 @@ buildable on its own.
 | Route group | Status |
 |---|---|
 | `/diagnoses/*` | **Implemented** — upload, validation, queue, inference, poll, SSE stream, image fetch, delete, feedback |
+| `/farms/*` | **Implemented** — farm and plot CRUD, cascade delete, ownership-scoped |
 | `/admin/models`, `/admin/models/{v}/activate` | **Implemented** — model registry + activation |
 | `/auth/register`, `/auth/me` | **Implemented** |
 | `/health` | **Implemented** — reports model/Firestore/broker readiness |
 | `/diseases`, `/diseases/{id}` | Reads implemented; **content empty by design** (see below) |
 | `/auth/login`, `/refresh`, `/logout` | **501** — Firebase client SDK owns these; see `app/routers/auth.py` |
-| `/farms/*`, `/notifications/*`, `/admin/stats` | **501** — routes, schemas and auth wired; handlers stubbed |
+| `/admin/stats` | **501** — needs a rollup job; Firestore has no `GROUP BY` |
 
 Every stub returns 501 with a message explaining what it needs, so nothing
 fails silently or looks finished when it isn't.
+
+`/notifications` was removed rather than left stubbed: regional outbreak
+alerts need farm locations and enough diagnosis volume per region to make
+"trending" mean anything, and neither exists yet.
 
 ## Architecture
 
@@ -138,29 +143,25 @@ auth.set_custom_user_claims(uid, {"admin": True})
 ## Known gaps / decisions to revisit
 
 - **`predict.py`/`data.py` are vendored copies, not a shared package.** They
-  must be manually re-copied from `agrivert-ml` after any change there,
-  especially to `build_eval_transform`. Nothing detects drift between the two
-  copies today.
-- **CORS is `*`** in `app/main.py`. Restrict before anything ships.
-- **Activation doesn't hot-reload workers.** Each Celery process caches its
-  loaded model; `/admin/models/{v}/activate` updates Firestore and clears the
-  API's cache, but workers need a restart. The response says so explicitly.
-  A pub/sub invalidation would fix it if that becomes annoying.
+  must be re-copied from `agrivert-ml` after any change there, especially to
+  `build_eval_transform`. `scripts/check_vendored.py <agrivert-ml-path>`
+  compares them by hash and can `--update` in place; run it after pulling
+  training changes.
 - **The disease KB ships empty.** `seed_diseases.py` creates a document per
   class with blank `description`/`symptoms`/`treatment` and
   `content_reviewed: false`. This is deliberate: that text is what a farmer
   reads before treating a real crop, and generating it without a cited
   agronomic source would produce fluent, unreviewed advice indistinguishable
-  from reviewed advice. Fill it in, then flip `content_reviewed`.
-- **`recommendation` on a diagnosis is never populated** — it should come
-  from the disease KB once that has content.
-- **`ROUTES.md` references flaws #2/#4/#5/#6/#7/#9 but the flaw list itself
-  is missing from the file.** The implementation is built against inferred
-  meanings (validation, async job, KB-backed verdict, farm/plot scoping,
-  feedback loop, model versioning). Worth reconciling against the original.
+  from reviewed advice. Fill it in, then flip `content_reviewed` — the
+  `recommendation` field on a diagnosis stays null until you do.
+- **`GET /admin/stats` is still a 501.** Firestore has no `GROUP BY`, so it
+  needs either counters incremented on write or a scheduled rollup job.
+- **`POST /auth/login|refresh|logout` are 501 by design** — the Firebase
+  client SDK owns the credential lifecycle. Only revisit if you move off
+  Firebase Auth.
 - **10 of 38 classes have no field training data** (`studio_only_classes`).
-  Diagnoses carry `fieldValidated: false` for these; the frontend should
-  visibly hedge on them.
+  Diagnoses carry `fieldValidated: false` for these; the frontend hedges
+  visibly on them.
 - **Field accuracy is 65.3%.** The `/feedback` loop is the long-term fix
   (`project_context.md` §3 step 6). Until then, the 0.95 confidence
   threshold means a large share of real photos will come back `uncertain` —

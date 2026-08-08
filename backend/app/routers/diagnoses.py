@@ -28,6 +28,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.dependencies import CurrentUser, get_current_user, owned_or_404
 from app.repositories import diagnoses as repo
+from app.repositories import diseases as diseases_repo
 from app.schemas.diagnoses import (
     TERMINAL_STATUSES,
     Diagnosis,
@@ -74,6 +75,20 @@ def _to_model(record: dict) -> Diagnosis:
         recommendation=record.get("recommendation"),
         error=record.get("error"),
     )
+
+
+def _enriched(record: dict) -> Diagnosis:
+    """A diagnosis with its KB-backed recommendation attached.
+
+    Only a completed verdict gets one: an `uncertain` diagnosis has no label
+    to advise on, and recommending a treatment there would undo the point of
+    withholding the verdict. Used by both the poll and stream endpoints so
+    they cannot return different shapes for the same record.
+    """
+    model = _to_model(record)
+    if model.status is DiagnosisStatus.COMPLETED:
+        model.recommendation = diseases_repo.recommendation_for(model.raw_label)
+    return model
 
 
 @router.post(
@@ -189,7 +204,7 @@ async def get_diagnosis(
     diagnosis_id: str, user: CurrentUser = Depends(get_current_user)
 ) -> Diagnosis:
     record = owned_or_404(repo.get(diagnosis_id), user, "diagnosis")
-    return _to_model(record)
+    return _enriched(record)
 
 
 @router.get("/{diagnosis_id}/stream", summary="Push status updates (SSE)")
@@ -218,7 +233,7 @@ async def stream_diagnosis(
             current = record["status"]
             if current != last_status:
                 last_status = current
-                payload = _to_model(record).model_dump(by_alias=True, mode="json")
+                payload = _enriched(record).model_dump(by_alias=True, mode="json")
                 yield {"event": "status", "data": json.dumps(payload)}
 
             if current in {s.value for s in TERMINAL_STATUSES}:

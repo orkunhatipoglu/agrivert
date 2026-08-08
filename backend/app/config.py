@@ -26,6 +26,24 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     environment: str = "development"
 
+    # --- CORS -----------------------------------------------------------
+    # Comma-separated origins allowed to call the API from a browser. The
+    # default covers the Next.js dev server only; a deployment must set its
+    # real origin. Credentials are sent on these requests, so "*" is not a
+    # safe default and is rejected outright below.
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        if "*" in origins:
+            raise ValueError(
+                "CORS_ORIGINS cannot be '*': the API sends credentialed "
+                "requests, and browsers reject a wildcard with credentials. "
+                "List the frontend's real origin(s) instead."
+            )
+        return origins
+
     # --- Firebase -------------------------------------------------------
     # Path to a service-account JSON, or leave unset to use
     # GOOGLE_APPLICATION_CREDENTIALS / workload identity.

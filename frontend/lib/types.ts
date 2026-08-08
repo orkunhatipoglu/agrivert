@@ -228,18 +228,6 @@ export interface HealthResponse {
   detail?: string | null
 }
 
-export interface AppNotification {
-  notificationId: string
-  kind: string
-  title: string
-  body?: string | null
-  read: boolean
-}
-
-export interface NotificationList {
-  items: AppNotification[]
-}
-
 export interface DiagnosisFilters {
   farmId?: string
   plotId?: string

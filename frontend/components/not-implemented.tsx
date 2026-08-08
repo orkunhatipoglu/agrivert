@@ -13,10 +13,10 @@ import {
 import { ApiError } from "@/lib/api"
 
 /**
- * The backend answers 501 for `/farms/*`, `/notifications/*` and
- * `/admin/stats`: the routes, schemas and auth are wired, the handlers are
- * not. Showing that plainly matters — an empty table here would read as
- * "you have no farms", which is a different and false statement.
+ * The backend answers 501 for `/admin/stats` and the `/auth` routes Firebase
+ * owns client-side: the routes, schemas and auth are wired, the handlers are
+ * not. Showing that plainly matters — an empty table would read as "there is
+ * no data", which is a different and false statement.
  *
  * The 501 detail is written by the backend and explains what each route still
  * needs, so it is surfaced verbatim rather than replaced with generic copy.

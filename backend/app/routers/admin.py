@@ -92,9 +92,9 @@ async def activate_model(
     model_repo.register(version, metrics=resolved.summary().get("metrics", {}))
     model_repo.activate(version)
 
-    # This process's cache is now stale; clear it. Worker processes are
-    # separate and will NOT see the change until their cache expires or they
-    # restart — see the detail message below.
+    # Clear this process's cache so anything served from the API side
+    # reloads. Workers hold their own caches, but they re-resolve the active
+    # version per task, so they pick this up on their next job.
     from app.ml.engine import clear_cache
 
     clear_cache()
@@ -103,9 +103,9 @@ async def activate_model(
         version=version,
         active=True,
         detail=(
-            "Activated. Celery workers cache their loaded model per process, "
-            "so restart the worker pool for the change to take effect on "
-            "inference; the API reflects it immediately."
+            "Activated. Workers re-resolve the active version on each task, "
+            "so the next diagnosis uses this version — no restart needed. "
+            "A job already in flight finishes on the previous version."
         ),
     )
 

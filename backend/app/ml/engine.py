@@ -63,23 +63,34 @@ def load_classifier(version: ModelVersion):
         clf = DiseaseClassifier(
             version.path, device=get_settings().inference_device
         )
+
+        # Keep only the version just loaded. Without this, every activation
+        # leaves the previous checkpoint (~26MB plus its CUDA allocations)
+        # resident for the life of the process. Evicting from the dict is
+        # safe mid-flight: a task already holding the object keeps its own
+        # reference until it finishes.
+        for stale in [v for v in _cache if v != version.version]:
+            log.info("evicting cached model version %s", stale)
+            del _cache[stale]
+
         _cache[version.version] = clf
         return clf
 
 
 def get_active_classifier() -> tuple[str, Any]:
-    """(version_name, classifier) for the currently active version."""
+    """(version_name, classifier) for the currently active version.
+
+    The active version is re-resolved on every call, so an activation is
+    picked up by the next task without restarting the worker. The cost is one
+    Firestore read per inference, which is negligible next to the forward
+    pass.
+    """
     version = resolve_active_version()
     return version.version, load_classifier(version)
 
 
 def clear_cache() -> None:
-    """Drop cached classifiers.
-
-    Called after an activation so the next task picks the new version up.
-    Note this only clears *this* process — see app/routers/admin.py on why
-    activation is not instantaneous across a worker pool.
-    """
+    """Drop cached classifiers, forcing a reload on next use."""
     with _lock:
         _cache.clear()
 

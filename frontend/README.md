@@ -52,13 +52,14 @@ in the UI.
 | `POST /diagnoses/{id}/feedback` | `components/feedback-form.tsx` |
 | `GET /diseases`, `/diseases/{id}` | `/diseases` |
 | `GET /auth/me`, `POST /auth/register` | `/account`, `/register` |
+| `/farms/*` | `/farms` — farm and plot management, with plots loaded lazily per farm |
 | `GET /admin/models`, `POST /admin/models/{v}/activate` | `/admin` (admin claim only) |
 | `GET /health` | Sidebar status popover |
-| `/farms/*`, `/notifications/*`, `/admin/stats` | `/farms`, `/notifications`, `/admin` — wired to the real calls, which answer 501, and the UI says so |
+| `/admin/stats` | `/admin` — wired to the real call, which answers 501, and the UI says so |
 
-The 501 routes are deliberately **not** mocked. An empty farms table would
-read as "you have no farms", which is a different and false statement; the
-pages render the backend's own 501 explanation instead.
+The remaining 501 route is deliberately **not** mocked. An empty stats panel
+would read as "there is no activity", which is a different and false
+statement; the page renders the backend's own 501 explanation instead.
 
 ## Design decisions worth knowing
 

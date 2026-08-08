@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import admin, auth, diagnoses, diseases, farms, health, notifications
+from app.routers import admin, auth, diagnoses, diseases, farms, health
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,13 +54,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Tighten this before anything real ships — "*" is a development default.
+# Origins come from CORS_ORIGINS and default to the Next.js dev server.
+# A wildcard is rejected in config.py rather than accepted here: these are
+# credentialed requests, so "*" would not work in a browser anyway.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 prefix = settings.api_prefix
@@ -68,6 +70,5 @@ app.include_router(auth.router, prefix=prefix)
 app.include_router(farms.router, prefix=prefix)
 app.include_router(diagnoses.router, prefix=prefix)
 app.include_router(diseases.router, prefix=prefix)
-app.include_router(notifications.router, prefix=prefix)
 app.include_router(admin.router, prefix=prefix)
 app.include_router(health.router, prefix=prefix)

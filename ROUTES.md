@@ -8,6 +8,59 @@ PlantVillage) → verdict is refined → verdict is returned to the frontend.
 Before the route list, a few gaps in the stated workflow are worth fixing
 first, since they change what routes are actually needed.
 
+## Gaps in the stated workflow
+
+> **Reconstructed.** The route tables below reference these by number, but the
+> list itself was missing from this file — it lived only in the original
+> planning conversation. What follows is rebuilt from the numbered references
+> (#2, #4, #5, #6, #7, #9 are cited in the tables) and from what the
+> implementation actually does. Treat the wording as a faithful summary, not
+> the original text.
+
+1. **Nobody owns a diagnosis.** "Farmer uploads a photo" assumes an identified
+   user, but the workflow never establishes one. Without an owner there is no
+   history, no privacy boundary, and no way to scope anything.
+   → the `/auth` routes, and `owner_uid` on every record.
+
+2. **The upload is assumed to be a usable photo.** It might be a PDF, a
+   screenshot, a 40 MB burst, or a truncated JPEG that decodes halfway. Failing
+   deep inside inference gives the farmer a useless error minutes later.
+   → validation at `POST /diagnoses`, with an explicit `rejected` status.
+
+3. **Nothing is persisted.** A verdict computed and returned is gone; the same
+   leaf photographed next week can't be compared to this one.
+   → stored diagnoses, `GET /diagnoses`, and the stored image route.
+
+4. **Inference doesn't fit in a request.** Preprocessing plus a forward pass
+   takes seconds, and holding an HTTP connection open for it fails badly on a
+   phone on rural data.
+   → the async job model: `POST` returns `queued`, then poll `GET
+   /diagnoses/{id}` or subscribe to `/stream`.
+
+5. **"Verdict is refined" is undefined.** A class label is not advice. A farmer
+   reading `Tomato___Late_blight` still doesn't know what to do about it.
+   → the disease knowledge base behind `/diseases`, and the `recommendation`
+   field on a completed diagnosis.
+
+6. **No spatial scoping.** A flat list of past diagnoses can't answer "is this
+   spreading in the north field?", which is the actual question.
+   → `/farms` and `/farms/{id}/plots`, and `farmId`/`plotId` filters on
+   history.
+
+7. **The model is assumed correct.** It is ~65% accurate on real field photos,
+   so it is wrong often, and nothing in the workflow lets a farmer say so.
+   → `POST /diagnoses/{id}/feedback`, which doubles as the retraining corpus.
+
+8. **Uncertainty has nowhere to go.** The workflow returns "a verdict" as if
+   there is always one. A confident wrong diagnosis is worse for a farmer than
+   an honest "I can't tell from this photo".
+   → the `uncertain` status, a calibrated confidence threshold, and withholding
+   the label below it.
+
+9. **Verdicts aren't attributable.** When a model is retrained, past diagnoses
+   become uninterpretable if nothing records which model produced them.
+   → `modelVersion` on every completed diagnosis, plus the `/admin/models`
+   routes.
 
 ## Proposed routes
 
@@ -62,13 +115,6 @@ Backs the "refined verdict" with actual guidance, per flaw #5.
 |---|---|---|
 | GET | `/diseases` | List all diseases the model can detect, with crop associations |
 | GET | `/diseases/{id}` | Disease details: description, symptoms, severity, recommended treatment |
-
-### Notifications (optional, v1.1+)
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/notifications` | List alerts (e.g. disease outbreak trending in the farmer's region) |
-| POST | `/notifications/subscribe` | Opt into regional outbreak alerts |
 
 ### Admin / model management
 
