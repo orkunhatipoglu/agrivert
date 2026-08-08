@@ -12,9 +12,25 @@ import logging
 from celery.signals import worker_process_init
 from celery.utils.log import get_task_logger
 
-from app.repositories import diagnoses as repo
-from app.services import storage
 from app.worker.celery_app import celery_app
+
+# NOTE: nothing here may import app.repositories / app.services / app.ml at
+# module level, and neither may app.worker.celery_app.
+#
+# Celery's `include=` imports this module in the *parent* process, which then
+# forks the pool children. Anything reaching firebase_admin pulls in grpc, and
+# grpc is not fork-safe: a child forked from a parent that already loaded grpc
+# inherits a dead c-ares resolver, so every Firestore call spins out its full
+# 60s/300s retry deadline and dies with
+#   "503 errors resolving firestore.googleapis.com: Could not contact DNS
+#    servers"
+# while the API — which never forks — talks to Firestore fine. Tasks then look
+# like they hang forever. GRPC_ENABLE_FORK_SUPPORT=1 does not help and
+# GRPC_DNS_RESOLVER=native only swaps the hang for an objc fork-safety crash.
+#
+# Importing grpc *after* the fork is clean, so every such import below is
+# deliberately inside a function body. tests/test_worker_fork_safety.py pins
+# this down.
 
 log = get_task_logger(__name__)
 
@@ -44,6 +60,10 @@ def _warm_model(**_kwargs) -> None:
 )
 def run_diagnosis(self, diagnosis_id: str, image_object: str) -> dict:
     """Fetch the image, run inference, persist the verdict."""
+    # Post-fork imports — see the module docstring note above.
+    from app.repositories import diagnoses as repo
+    from app.services import storage
+
     log.info("running diagnosis %s", diagnosis_id)
 
     try:

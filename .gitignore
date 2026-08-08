@@ -1,0 +1,4 @@
+# Runtime state written by start.sh (pids + service logs).
+.run/
+
+.DS_Store
