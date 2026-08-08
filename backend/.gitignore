@@ -1,0 +1,14 @@
+# Credentials — never commit these.
+.env
+secrets/
+*serviceAccount*.json
+
+# Model registry: weights are large binaries, versioned by the registry, not git.
+models/*/
+!models/README.md
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/

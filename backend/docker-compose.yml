@@ -1,0 +1,65 @@
+# Run from the repo root:
+#   docker compose -f backend/docker-compose.yml up --build
+#
+# Build context is the repo root so the image can copy predict.py / data.py.
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      # Model registry mounted rather than baked in: a retrained model is
+      # then a file drop plus an activate call, not an image rebuild.
+      - ./models:/srv/backend/models
+      - ./secrets:/srv/backend/secrets:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./models:/srv/backend/models
+      - ./secrets:/srv/backend/secrets:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    # concurrency=1: each process loads its own copy of the model. Scale with
+    # `--scale worker=N` rather than raising concurrency.
+    command: >
+      celery -A app.worker.celery_app:celery_app worker
+      --loglevel=info --concurrency=1
+
+    # For GPU inference, uncomment (needs nvidia-container-toolkit) and build
+    # the image against the CUDA torch index:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
