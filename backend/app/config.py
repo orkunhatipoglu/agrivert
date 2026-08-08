@@ -14,9 +14,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# backend/app/config.py -> backend/ -> repo root
+# backend/app/config.py -> backend/
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-REPO_ROOT = BACKEND_DIR.parent
 
 
 class Settings(BaseSettings):
@@ -45,10 +44,12 @@ class Settings(BaseSettings):
     model_registry_dir: Path = BACKEND_DIR / "models"
     # Fallback when Firestore has no active version recorded (local dev).
     default_model_version: str | None = None
-    # Where predict.py / data.py live. The backend imports the *training*
-    # preprocessing rather than reimplementing it, so serving cannot drift
-    # from training (project_context.md §2.7).
-    ml_repo_root: Path = REPO_ROOT
+    # Where predict.py / data.py live. They are vendored into backend/ (kept
+    # byte-identical to the training repo's copies) so the backend imports
+    # the *training* preprocessing rather than reimplementing it — serving
+    # cannot drift from training (project_context.md §2.7). Override only if
+    # you relocate them.
+    ml_repo_root: Path = BACKEND_DIR
     inference_device: str | None = None  # None => cuda if available, else cpu
 
     # --- Upload validation (ROUTES.md flaw #2) --------------------------

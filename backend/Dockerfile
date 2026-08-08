@@ -2,9 +2,10 @@
 # command, and keeping one image guarantees the worker's preprocessing matches
 # what the API validated against.
 #
-# Build from the REPO ROOT, not backend/, because the image needs predict.py
-# and data.py from the ML repo:
-#   docker build -f backend/Dockerfile -t agrivert-backend .
+# backend/ is self-contained (predict.py and data.py are vendored in — see
+# backend/README.md on why), so build from backend/ itself:
+#   docker build -f Dockerfile -t agrivert-backend .   (run from backend/)
+#   docker build -f backend/Dockerfile -t agrivert-backend backend   (from repo root)
 
 FROM python:3.11-slim
 
@@ -18,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /srv
+WORKDIR /srv/backend
 
 # Torch first, from the CUDA index, as its own layer: it is by far the largest
 # dependency and rarely changes.
@@ -26,18 +27,14 @@ WORKDIR /srv
 RUN pip install --index-url https://download.pytorch.org/whl/cu124 \
         torch>=2.4 torchvision>=0.19
 
-COPY backend/requirements.txt /srv/backend/requirements.txt
-RUN pip install -r /srv/backend/requirements.txt
+COPY requirements.txt .
+RUN pip install -r requirements.txt
 
-# The ML-side modules the backend imports for preprocessing + inference.
-COPY predict.py data.py /srv/
+# predict.py and data.py included via this COPY — they live in backend/
+# alongside app/, not at a separate repo root.
+COPY . .
 
-COPY backend/ /srv/backend/
-
-WORKDIR /srv/backend
-
-ENV ML_REPO_ROOT=/srv \
-    MODEL_REGISTRY_DIR=/srv/backend/models \
+ENV MODEL_REGISTRY_DIR=/srv/backend/models \
     PYTHONPATH=/srv/backend
 
 EXPOSE 8000

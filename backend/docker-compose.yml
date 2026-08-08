@@ -1,7 +1,8 @@
-# Run from the repo root:
-#   docker compose -f backend/docker-compose.yml up --build
+# Run from backend/:
+#   docker compose up --build
 #
-# Build context is the repo root so the image can copy predict.py / data.py.
+# backend/ is self-contained (predict.py / data.py are vendored in), so the
+# build context is backend/ itself.
 
 services:
   redis:
@@ -16,8 +17,8 @@ services:
 
   api:
     build:
-      context: ..
-      dockerfile: backend/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     env_file:
@@ -36,8 +37,8 @@ services:
 
   worker:
     build:
-      context: ..
-      dockerfile: backend/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     env_file:
       - .env
     environment:

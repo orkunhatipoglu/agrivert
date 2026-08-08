@@ -1,7 +1,11 @@
 # Agrivert Backend
 
-FastAPI + Celery + Redis + Firebase. Implements the routes in `../ROUTES.md`
-against the model trained in `../` (see `../project_context.md`).
+FastAPI + Celery + Redis + Firebase. Implements the routes planned in the
+`agrivert-ml` project's `ROUTES.md`, against the model trained by that same
+project (see its `project_context.md` for the training pipeline this backend
+consumes). `predict.py` and `data.py` here are vendored, byte-identical
+copies from that repo — this `backend/` directory is self-contained and
+buildable on its own.
 
 ## What is and isn't implemented
 
@@ -45,9 +49,21 @@ otherwise every diagnosis would push megabytes of JPEG through the broker.
 `predict.py` builds its eval transform from `data.build_eval_transform`, so
 importing it guarantees serving preprocessing is byte-identical to training.
 Reimplementing resize/crop/normalize here would reintroduce exactly the
-train/serve drift `project_context.md` §2.7 warns about. `ML_REPO_ROOT`
-points at the repo root; the Dockerfile copies `predict.py` and `data.py`
-into the image.
+train/serve drift `project_context.md` §2.7 warns about.
+
+`predict.py` and `data.py` are **vendored into this directory** rather than
+imported from a sibling repo path — the training project (`agrivert-ml`) and
+this backend are pushed to different places (the training repo is not on
+GitHub; this backend is), so a cross-repo relative path would only work on
+one machine. `ML_REPO_ROOT` (`app/config.py`) defaults to `backend/` itself;
+override it only if you relocate these files.
+
+**Keeping them in sync is manual.** When the training pipeline changes
+`predict.py` or `data.py` — especially `build_eval_transform`, since serving
+must match training exactly — copy the updated files into `backend/` again.
+Nothing currently automates or checks this; a staleness check (e.g. comparing
+file hashes at startup) would be a reasonable thing to add if the two drift
+in practice.
 
 ### Model modularity
 
@@ -70,7 +86,9 @@ mkdir -p secrets              # put serviceAccount.json here (gitignored)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 
-python scripts/register_model.py ../artifacts --version v1-blended-20260808 --activate
+# Path to the artifacts/ dir is wherever your training run's output lives —
+# adjust if this isn't checked out next to the agrivert-ml project.
+python scripts/register_model.py /path/to/agrivert-ml/artifacts --version v1-blended-20260808 --activate
 python scripts/seed_diseases.py
 ```
 
@@ -82,10 +100,10 @@ celery -A app.worker.celery_app:celery_app worker --loglevel=info --concurrency=
 uvicorn app.main:app --reload
 ```
 
-Or:
+Or, from this directory:
 
 ```bash
-docker compose -f backend/docker-compose.yml up --build   # from repo root
+docker compose up --build
 ```
 
 Interactive docs at http://localhost:8000/docs.
@@ -119,6 +137,10 @@ auth.set_custom_user_claims(uid, {"admin": True})
 
 ## Known gaps / decisions to revisit
 
+- **`predict.py`/`data.py` are vendored copies, not a shared package.** They
+  must be manually re-copied from `agrivert-ml` after any change there,
+  especially to `build_eval_transform`. Nothing detects drift between the two
+  copies today.
 - **CORS is `*`** in `app/main.py`. Restrict before anything ships.
 - **Activation doesn't hot-reload workers.** Each Celery process caches its
   loaded model; `/admin/models/{v}/activate` updates Firestore and clears the
