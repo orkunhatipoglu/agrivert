@@ -1,0 +1,22 @@
+# Training dependencies. Install torch/torchvision FIRST from the CUDA index:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#   pip install -r requirements.txt
+#
+# Installing torch from plain PyPI can silently give you a CPU-only build,
+# which trains roughly 50x slower on an RTX 4060.
+
+torch>=2.4
+torchvision>=0.19
+
+# Augmentation. data.py supports both the 1.x and 2.x constructor signatures
+# (RandomResizedCrop height/width -> size, CoarseDropout max_holes ->
+# num_holes_range), so either line works; 2.x is the tested default.
+albumentations>=1.4.15
+opencv-python-headless>=4.9      # albumentations backend; headless avoids GUI libs in WSL
+
+numpy>=1.24
+Pillow>=10.0
+scikit-learn>=1.3
+kagglehub>=0.3.0
+onnx>=1.15
+huggingface_hub>=0.24        # PlantWild lives on HuggingFace, not Kaggle
