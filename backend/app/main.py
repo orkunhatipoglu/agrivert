@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import admin, auth, diagnoses, diseases, farms, health
+from app.routers import admin, auth, diagnoses, diseases, health
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,7 +67,6 @@ app.add_middleware(
 
 prefix = settings.api_prefix
 app.include_router(auth.router, prefix=prefix)
-app.include_router(farms.router, prefix=prefix)
 app.include_router(diagnoses.router, prefix=prefix)
 app.include_router(diseases.router, prefix=prefix)
 app.include_router(admin.router, prefix=prefix)

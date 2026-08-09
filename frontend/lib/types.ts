@@ -44,8 +44,6 @@ export interface Diagnosis {
   status: DiagnosisStatus
   createdAt: string
   updatedAt?: string | null
-  plotId?: string | null
-  farmId?: string | null
 
   /**
    * Null while queued/processing — and deliberately null when `uncertain`
@@ -79,7 +77,6 @@ export interface DiagnosisListItem {
   condition?: string | null
   healthy?: boolean | null
   confidence?: number | null
-  plotId?: string | null
 }
 
 export interface DiagnosisList {
@@ -135,40 +132,6 @@ export interface Disease extends DiseaseSummary {
 
 export interface DiseaseList {
   items: DiseaseSummary[]
-}
-
-export interface GeoPoint {
-  latitude: number
-  longitude: number
-}
-
-export interface Farm {
-  farmId: string
-  ownerUid: string
-  name: string
-  location?: GeoPoint | null
-  region?: string | null
-  createdAt: string
-  updatedAt?: string | null
-}
-
-export interface Plot {
-  plotId: string
-  farmId: string
-  name: string
-  cropType: string
-  areaHectares?: number | null
-  location?: GeoPoint | null
-  createdAt: string
-  updatedAt?: string | null
-}
-
-export interface FarmList {
-  items: Farm[]
-}
-
-export interface PlotList {
-  items: Plot[]
 }
 
 export interface ModelVersionInfo {
@@ -229,8 +192,6 @@ export interface HealthResponse {
 }
 
 export interface DiagnosisFilters {
-  farmId?: string
-  plotId?: string
   diseaseId?: string
   status?: DiagnosisStatus
   dateFrom?: string

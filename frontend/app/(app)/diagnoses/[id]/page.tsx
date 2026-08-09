@@ -188,8 +188,6 @@ function Metadata({ diagnosis }: { diagnosis: Diagnosis }) {
       value: <RawLabel rawLabel={diagnosis.rawLabel} />,
     })
   }
-  if (diagnosis.plotId) rows.push({ label: "Plot", value: diagnosis.plotId })
-  if (diagnosis.farmId) rows.push({ label: "Farm", value: diagnosis.farmId })
   rows.push({ label: "ID", value: diagnosis.diagnosisId })
 
   return (

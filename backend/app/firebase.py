@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
 
-from app.config import get_settings
+from app.config import BACKEND_DIR, get_settings
 
 if TYPE_CHECKING:  # pragma: no cover
     from google.cloud.firestore import Client as FirestoreClient
@@ -23,8 +24,6 @@ log = logging.getLogger(__name__)
 
 # Firestore collection names, in one place so the seeder/scripts agree.
 COLLECTION_USERS = "users"
-COLLECTION_FARMS = "farms"
-COLLECTION_PLOTS = "plots"
 COLLECTION_DIAGNOSES = "diagnoses"
 COLLECTION_FEEDBACK = "diagnosis_feedback"
 COLLECTION_DISEASES = "diseases"
@@ -47,7 +46,12 @@ def get_app() -> firebase_admin.App:
         options["projectId"] = settings.firebase_project_id
 
     if settings.firebase_credentials_path:
-        cred = credentials.Certificate(settings.firebase_credentials_path)
+        # Anchor a relative path to backend/, matching the path settings in
+        # config.py, so credentials resolve regardless of the process's cwd.
+        cred_path = Path(settings.firebase_credentials_path)
+        if not cred_path.is_absolute():
+            cred_path = BACKEND_DIR / cred_path
+        cred = credentials.Certificate(str(cred_path))
     else:
         # Application Default Credentials: GOOGLE_APPLICATION_CREDENTIALS,
         # gcloud login, or workload identity on GCP.

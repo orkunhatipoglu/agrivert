@@ -57,8 +57,6 @@ class Diagnosis(CamelModel):
     status: DiagnosisStatus
     created_at: datetime
     updated_at: datetime | None = None
-    plot_id: str | None = None
-    farm_id: str | None = None
 
     # Populated once completed. All None while queued/processing, and also
     # when uncertain — an uncertain verdict must NOT surface a diagnosis
@@ -92,7 +90,6 @@ class DiagnosisListItem(CamelModel):
     condition: str | None = None
     healthy: bool | None = None
     confidence: float | None = None
-    plot_id: str | None = None
 
 
 class DiagnosisList(CamelModel):

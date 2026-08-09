@@ -58,16 +58,12 @@ function History() {
   const [diseaseId, setDiseaseId] = React.useState<string>(
     () => searchParams.get("diseaseId") ?? ANY
   )
-  const [plotId, setPlotId] = React.useState("")
-  const [farmId, setFarmId] = React.useState("")
   const [dateFrom, setDateFrom] = React.useState("")
   const [dateTo, setDateTo] = React.useState("")
 
   const filters: DiagnosisFilters = {
     status: status === ANY ? undefined : (status as DiagnosisStatus),
     diseaseId: diseaseId === ANY ? undefined : diseaseId,
-    plotId: plotId.trim() || undefined,
-    farmId: farmId.trim() || undefined,
     // <input type="date"> gives a bare date; the API parses a datetime.
     dateFrom: dateFrom ? new Date(dateFrom).toISOString() : undefined,
     dateTo: dateTo ? new Date(`${dateTo}T23:59:59`).toISOString() : undefined,
@@ -77,7 +73,7 @@ function History() {
   const active =
     status !== ANY ||
     diseaseId !== ANY ||
-    Boolean(plotId || farmId || dateFrom || dateTo)
+    Boolean(dateFrom || dateTo)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["diagnoses", filters],
@@ -93,8 +89,6 @@ function History() {
   function clearFilters() {
     setStatus(ANY)
     setDiseaseId(ANY)
-    setPlotId("")
-    setFarmId("")
     setDateFrom("")
     setDateTo("")
   }
@@ -148,26 +142,6 @@ function History() {
               ))}
             </SelectContent>
           </Select>
-        </Field>
-
-        <Field>
-          <FieldLabel htmlFor="plot">Plot ID</FieldLabel>
-          <Input
-            id="plot"
-            value={plotId}
-            onChange={(event) => setPlotId(event.target.value)}
-            className="font-mono"
-          />
-        </Field>
-
-        <Field>
-          <FieldLabel htmlFor="farm">Farm ID</FieldLabel>
-          <Input
-            id="farm"
-            value={farmId}
-            onChange={(event) => setFarmId(event.target.value)}
-            className="font-mono"
-          />
         </Field>
 
         <Field>

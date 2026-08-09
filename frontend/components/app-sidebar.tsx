@@ -8,7 +8,6 @@ import {
   HistoryIcon,
   LayoutGridIcon,
   ScanIcon,
-  SproutIcon,
   UserIcon,
 } from "lucide-react"
 
@@ -37,10 +36,7 @@ const MONITOR = [
   { href: "/diseases", label: "Disease library", icon: BookOpenIcon },
 ]
 
-const MANAGE = [
-  { href: "/farms", label: "Farms & plots", icon: SproutIcon },
-  { href: "/account", label: "Account", icon: UserIcon },
-]
+const MANAGE = [{ href: "/account", label: "Account", icon: UserIcon }]
 
 export function AppSidebar() {
   const pathname = usePathname()

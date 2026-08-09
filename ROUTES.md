@@ -44,8 +44,9 @@ first, since they change what routes are actually needed.
 
 6. **No spatial scoping.** A flat list of past diagnoses can't answer "is this
    spreading in the north field?", which is the actual question.
-   → `/farms` and `/farms/{id}/plots`, and `farmId`/`plotId` filters on
-   history.
+   → **Not addressed.** `/farms`, `/farms/{id}/plots` and the `farmId`/`plotId`
+   filters were built and then removed; see "Farms & plots (removed)" below.
+   History is scoped by owner, class and date only.
 
 7. **The model is assumed correct.** It is ~65% accurate on real field photos,
    so it is wrong often, and nothing in the workflow lets a farmer say so.
@@ -76,22 +77,19 @@ Base path: `/api/v1`
 | POST | `/auth/logout` | Invalidate refresh token |
 | GET | `/auth/me` | Current user profile |
 
-### Farms & plots
+### Farms & plots (removed)
 
-Scoping diagnoses to a farm/plot is what makes history and trend-tracking
-possible (see flaw #6).
+`/farms` and `/farms/{farmId}/plots` implemented full CRUD with cascade delete
+and ownership scoping, and diagnoses carried optional `farmId`/`plotId` tags.
+All of it has been removed — routes, schemas, repositories, the `/farms` page
+and the tag fields on a diagnosis.
 
-| Method | Path | Description |
-|---|---|---|
-| GET | `/farms` | List the current user's farms |
-| POST | `/farms` | Create a farm |
-| GET | `/farms/{farmId}` | Farm details |
-| PATCH | `/farms/{farmId}` | Update farm (name, location) |
-| DELETE | `/farms/{farmId}` | Delete a farm |
-| GET | `/farms/{farmId}/plots` | List plots/fields within a farm |
-| POST | `/farms/{farmId}/plots` | Create a plot (crop type, area, location) |
-| PATCH | `/farms/{farmId}/plots/{plotId}` | Update a plot |
-| DELETE | `/farms/{farmId}/plots/{plotId}` | Delete a plot |
+Flaw #6 is therefore an open gap rather than a solved one. Anything that
+reintroduces spatial scoping starts from that flaw, not from this table.
+
+Note that removing the code does not remove data: existing `farms` and `plots`
+Firestore documents, and `farm_id`/`plot_id` fields on diagnoses written
+before the removal, are still there and are now simply unread.
 
 ### Diagnoses (the core photo → verdict workflow)
 
@@ -99,11 +97,11 @@ Modeled as an async job, per flaw #4.
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/diagnoses` | Upload a photo (multipart), optionally with `plotId`. Runs validation (flaw #2), enqueues preprocessing + inference, returns `{ diagnosisId, status: "queued" }` |
+| POST | `/diagnoses` | Upload a photo (multipart). Runs validation (flaw #2), enqueues preprocessing + inference, returns `{ diagnosisId, status: "queued" }` |
 | GET | `/diagnoses/{id}` | Poll status/result: `queued` \| `processing` \| `rejected` \| `uncertain` \| `completed` \| `failed`, plus verdict, confidence, and recommendation once completed |
 | GET | `/diagnoses/{id}/stream` | WebSocket/SSE endpoint to push status updates instead of polling |
 | GET | `/diagnoses/{id}/image` | Fetch the original uploaded photo |
-| GET | `/diagnoses` | List diagnosis history, filterable by `farmId`, `plotId`, `dateRange`, `diseaseId`, `status` |
+| GET | `/diagnoses` | List diagnosis history, filterable by `dateRange`, `diseaseId`, `status` |
 | DELETE | `/diagnoses/{id}` | Delete a diagnosis record and its stored image |
 | POST | `/diagnoses/{id}/feedback` | Farmer confirms or corrects the verdict (flaw #7) — feeds a retraining dataset |
 

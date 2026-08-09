@@ -27,8 +27,6 @@ def create(
     diagnosis_id: str,
     owner_uid: str,
     image_object: str,
-    plot_id: str | None,
-    farm_id: str | None,
     image_meta: dict[str, Any],
 ) -> dict:
     doc = {
@@ -36,8 +34,6 @@ def create(
         "owner_uid": owner_uid,
         "status": DiagnosisStatus.QUEUED.value,
         "image_object": image_object,
-        "plot_id": plot_id,
-        "farm_id": farm_id,
         "image": image_meta,
         "created_at": _now(),
         "updated_at": _now(),
@@ -50,8 +46,6 @@ def create_rejected(
     diagnosis_id: str,
     owner_uid: str,
     reason: str,
-    plot_id: str | None,
-    farm_id: str | None,
 ) -> dict:
     """Record an upload that failed validation (flaw #2).
 
@@ -63,8 +57,6 @@ def create_rejected(
         "owner_uid": owner_uid,
         "status": DiagnosisStatus.REJECTED.value,
         "error": reason,
-        "plot_id": plot_id,
-        "farm_id": farm_id,
         "created_at": _now(),
         "updated_at": _now(),
     }
@@ -120,8 +112,6 @@ def mark_failed(diagnosis_id: str, error: str) -> None:
 
 def list_for_user(
     owner_uid: str,
-    farm_id: str | None = None,
-    plot_id: str | None = None,
     status: str | None = None,
     disease_id: str | None = None,
     date_from: datetime | None = None,
@@ -136,10 +126,6 @@ def list_for_user(
     q = get_db().collection(COLLECTION_DIAGNOSES).where(
         filter=gcf.FieldFilter("owner_uid", "==", owner_uid)
     )
-    if farm_id:
-        q = q.where(filter=gcf.FieldFilter("farm_id", "==", farm_id))
-    if plot_id:
-        q = q.where(filter=gcf.FieldFilter("plot_id", "==", plot_id))
     if status:
         q = q.where(filter=gcf.FieldFilter("status", "==", status))
     if disease_id:

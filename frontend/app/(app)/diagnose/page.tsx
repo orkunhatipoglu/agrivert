@@ -18,13 +18,6 @@ import { StatusBadge } from "@/components/status-badge"
 import { VerdictPanel } from "@/components/verdict-panel"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
 import { useDiagnosisLive } from "@/hooks/use-diagnosis-live"
@@ -38,8 +31,6 @@ export default function DiagnosePage() {
   const [file, setFile] = React.useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
   const [localError, setLocalError] = React.useState<string | null>(null)
-  const [plotId, setPlotId] = React.useState("")
-  const [farmId, setFarmId] = React.useState("")
   const [diagnosisId, setDiagnosisId] = React.useState<string | null>(null)
   const [dragging, setDragging] = React.useState(false)
 
@@ -71,8 +62,6 @@ export default function DiagnosePage() {
     mutationFn: () =>
       diagnosesApi.create({
         file: file!,
-        plotId: plotId.trim() || undefined,
-        farmId: farmId.trim() || undefined,
       }),
     onSuccess: (created) => {
       setDiagnosisId(created.diagnosisId)
@@ -221,39 +210,6 @@ export default function DiagnosePage() {
 
           {file && !diagnosisId && (
             <>
-              <Collapsible>
-                <CollapsibleTrigger asChild>
-                  <Button variant="ghost" size="sm" className="self-start">
-                    Tag this to a plot
-                  </Button>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="flex flex-col gap-4 pt-4">
-                  <Field>
-                    <FieldLabel htmlFor="plotId">Plot ID</FieldLabel>
-                    <Input
-                      id="plotId"
-                      value={plotId}
-                      onChange={(event) => setPlotId(event.target.value)}
-                      className="font-mono"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="farmId">Farm ID</FieldLabel>
-                    <Input
-                      id="farmId"
-                      value={farmId}
-                      onChange={(event) => setFarmId(event.target.value)}
-                      className="font-mono"
-                    />
-                    <FieldDescription>
-                      Both are optional and free-form for now — farm and plot
-                      management isn&apos;t built on the API yet, but anything
-                      you enter is stored on the diagnosis and filters history.
-                    </FieldDescription>
-                  </Field>
-                </CollapsibleContent>
-              </Collapsible>
-
               <Button
                 size="lg"
                 className="self-start"

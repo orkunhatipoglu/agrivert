@@ -4,7 +4,7 @@
  * Every route group in `backend/app/routers/` is represented here, including
  * the ones that currently answer 501. Those throw `NotImplementedError` so a
  * page can say plainly that the backend hasn't shipped it yet, rather than
- * rendering an empty list that reads as "you have no farms".
+ * rendering an empty list that reads as "you have no diagnoses".
  */
 
 import { getIdToken } from "@/lib/firebase"
@@ -17,15 +17,10 @@ import type {
   DiagnosisList,
   Disease,
   DiseaseList,
-  Farm,
-  FarmList,
   FeedbackRequest,
   FeedbackResponse,
-  GeoPoint,
   HealthResponse,
   ModelVersionList,
-  Plot,
-  PlotList,
   UserProfile,
 } from "@/lib/types"
 
@@ -142,7 +137,7 @@ function jsonBody(body: unknown): RequestInit {
   }
 }
 
-/** Drops undefined/empty values so we never send `?farm_id=undefined`. */
+/** Drops undefined/empty values so we never send `?disease_id=undefined`. */
 function query(params: Record<string, string | number | undefined>): string {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
@@ -187,19 +182,9 @@ export const authApi = {
 // --- Diagnoses ------------------------------------------------------------
 
 export const diagnosesApi = {
-  /**
-   * Multipart field names are snake_case: they come straight from the
-   * `plot_id` / `farm_id` parameters of the FastAPI handler.
-   */
-  create: async (input: {
-    file: File
-    plotId?: string
-    farmId?: string
-  }): Promise<DiagnosisCreated> => {
+  create: async (input: { file: File }): Promise<DiagnosisCreated> => {
     const form = new FormData()
     form.append("file", input.file)
-    if (input.plotId) form.append("plot_id", input.plotId)
-    if (input.farmId) form.append("farm_id", input.farmId)
     return request<DiagnosisCreated>("/diagnoses", {
       method: "POST",
       body: form,
@@ -209,8 +194,6 @@ export const diagnosesApi = {
   list: (filters: DiagnosisFilters = {}): Promise<DiagnosisList> =>
     request<DiagnosisList>(
       `/diagnoses${query({
-        farm_id: filters.farmId,
-        plot_id: filters.plotId,
         disease_id: filters.diseaseId,
         status: filters.status,
         date_from: filters.dateFrom,
@@ -323,62 +306,6 @@ export const diseasesApi = {
   list: (): Promise<DiseaseList> => request<DiseaseList>("/diseases"),
   get: (id: string): Promise<Disease> =>
     request<Disease>(`/diseases/${encodeURIComponent(id)}`),
-}
-
-// --- Farms & plots --------------------------------------------------------
-
-/**
- * Write bodies are spelled out rather than `Partial<Farm>` so server-owned
- * fields (`farmId`, `ownerUid`, `createdAt`) can't be sent in a PATCH. The
- * API ignores unknown keys, but the type is the place to catch it.
- */
-export interface FarmWrite {
-  name?: string
-  region?: string | null
-  location?: GeoPoint | null
-}
-
-export interface PlotWrite {
-  name?: string
-  cropType?: string
-  areaHectares?: number | null
-  location?: GeoPoint | null
-}
-
-export const farmsApi = {
-  list: (): Promise<FarmList> => request<FarmList>("/farms"),
-  create: (body: FarmWrite & { name: string }): Promise<Farm> =>
-    request<Farm>("/farms", { method: "POST", ...jsonBody(body) }),
-  get: (farmId: string): Promise<Farm> =>
-    request<Farm>(`/farms/${encodeURIComponent(farmId)}`),
-  update: (farmId: string, body: FarmWrite): Promise<Farm> =>
-    request<Farm>(`/farms/${encodeURIComponent(farmId)}`, {
-      method: "PATCH",
-      ...jsonBody(body),
-    }),
-  remove: (farmId: string): Promise<void> =>
-    request<void>(`/farms/${encodeURIComponent(farmId)}`, { method: "DELETE" }),
-
-  listPlots: (farmId: string): Promise<PlotList> =>
-    request<PlotList>(`/farms/${encodeURIComponent(farmId)}/plots`),
-  createPlot: (
-    farmId: string,
-    body: PlotWrite & { name: string; cropType: string }
-  ): Promise<Plot> =>
-    request<Plot>(`/farms/${encodeURIComponent(farmId)}/plots`, {
-      method: "POST",
-      ...jsonBody(body),
-    }),
-  updatePlot: (farmId: string, plotId: string, body: PlotWrite): Promise<Plot> =>
-    request<Plot>(
-      `/farms/${encodeURIComponent(farmId)}/plots/${encodeURIComponent(plotId)}`,
-      { method: "PATCH", ...jsonBody(body) }
-    ),
-  removePlot: (farmId: string, plotId: string): Promise<void> =>
-    request<void>(
-      `/farms/${encodeURIComponent(farmId)}/plots/${encodeURIComponent(plotId)}`,
-      { method: "DELETE" }
-    ),
 }
 
 // --- Admin ----------------------------------------------------------------

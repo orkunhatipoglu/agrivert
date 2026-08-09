@@ -92,7 +92,10 @@ def registry_settings(model_dir, monkeypatch):
     from app.config import Settings, get_settings
 
     get_settings.cache_clear()
-    settings = Settings(model_registry_dir=model_dir.parent)
+    # _env_file=None keeps the developer's backend/.env out of the fixture.
+    # Without it, a local DEFAULT_MODEL_VERSION leaks in and the fallback
+    # tests below resolve to a version that doesn't exist in the tmp dir.
+    settings = Settings(model_registry_dir=model_dir.parent, _env_file=None)
     monkeypatch.setattr("app.config.get_settings", lambda: settings)
     monkeypatch.setattr("app.ml.registry.get_settings", lambda: settings)
     yield settings

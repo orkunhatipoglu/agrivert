@@ -48,7 +48,6 @@ export function DiagnosisRow({
           <time dateTime={item.createdAt}>
             {formatDistanceToNow(new Date(item.createdAt), { addSuffix: true })}
           </time>
-          {item.plotId && <span className="truncate">plot {item.plotId}</span>}
           {typeof item.confidence === "number" && (
             <span className="tabular-nums">
               {formatConfidence(item.confidence)}

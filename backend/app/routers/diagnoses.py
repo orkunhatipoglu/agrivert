@@ -60,8 +60,6 @@ def _to_model(record: dict) -> Diagnosis:
         status=record["status"],
         created_at=record["created_at"],
         updated_at=record.get("updated_at"),
-        plot_id=record.get("plot_id"),
-        farm_id=record.get("farm_id"),
         crop=record.get("crop"),
         condition=record.get("condition"),
         healthy=record.get("healthy"),
@@ -99,8 +97,6 @@ def _enriched(record: dict) -> Diagnosis:
 )
 async def create_diagnosis(
     file: UploadFile = File(..., description="The plant photo"),
-    plot_id: str | None = Form(default=None),
-    farm_id: str | None = Form(default=None),
     user: CurrentUser = Depends(get_current_user),
 ) -> DiagnosisCreated:
     diagnosis_id = str(uuid.uuid4())
@@ -115,8 +111,6 @@ async def create_diagnosis(
             diagnosis_id=diagnosis_id,
             owner_uid=user.uid,
             reason=str(exc),
-            plot_id=plot_id,
-            farm_id=farm_id,
         )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -142,8 +136,6 @@ async def create_diagnosis(
         diagnosis_id=diagnosis_id,
         owner_uid=user.uid,
         image_object=object_name,
-        plot_id=plot_id,
-        farm_id=farm_id,
         image_meta={
             "content_type": validated.content_type,
             "width": validated.width,
@@ -161,8 +153,6 @@ async def create_diagnosis(
 
 @router.get("", response_model=DiagnosisList, summary="List diagnosis history")
 async def list_diagnoses(
-    farm_id: str | None = Query(default=None),
-    plot_id: str | None = Query(default=None),
     disease_id: str | None = Query(
         default=None, description="Filter by raw_label, e.g. Tomato___Late_blight"
     ),
@@ -174,8 +164,6 @@ async def list_diagnoses(
 ) -> DiagnosisList:
     records = repo.list_for_user(
         owner_uid=user.uid,
-        farm_id=farm_id,
-        plot_id=plot_id,
         status=status_filter.value if status_filter else None,
         disease_id=disease_id,
         date_from=date_from,
@@ -192,7 +180,6 @@ async def list_diagnoses(
                 condition=r.get("condition"),
                 healthy=r.get("healthy"),
                 confidence=r.get("confidence"),
-                plot_id=r.get("plot_id"),
             )
             for r in records
         ]

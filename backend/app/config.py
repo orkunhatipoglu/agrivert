@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/app/config.py -> backend/
@@ -20,7 +22,11 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        # Absolute, so the same .env is read whether the process starts in
+        # backend/, the repo root, or anywhere else.
+        env_file=BACKEND_DIR / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     api_prefix: str = "/api/v1"
@@ -67,6 +73,20 @@ class Settings(BaseSettings):
     # training preprocessing — the same objects, not a copy that can drift.
     ml_repo_root: Path = BACKEND_DIR.parent
     inference_device: str | None = None  # None => cuda if available, else cpu
+
+    # A blank `KEY=` line in .env still overrides the default with "", which
+    # Path turns into "." — i.e. whatever directory the process happened to
+    # start in. That silently broke the Celery worker's `import ml.predict`
+    # (cwd was backend/, but ml/ is its parent). Treat blank as "unset", and
+    # anchor relative paths to backend/ so they mean the same thing no matter
+    # where uvicorn/celery/pytest is launched from.
+    @field_validator("model_registry_dir", "ml_repo_root", mode="before")
+    @classmethod
+    def _path_or_default(cls, v: Any, info) -> Any:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return cls.model_fields[info.field_name].default
+        path = Path(v)
+        return path if path.is_absolute() else (BACKEND_DIR / path).resolve()
 
     # --- Upload validation (ROUTES.md flaw #2) --------------------------
     max_upload_bytes: int = 12 * 1024 * 1024
