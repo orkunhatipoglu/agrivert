@@ -153,10 +153,26 @@ auth.set_custom_user_claims(uid, {"admin": True})
 - **`POST /auth/login|refresh|logout` are 501 by design** — the Firebase
   client SDK owns the credential lifecycle. Only revisit if you move off
   Firebase Auth.
-- **10 of 38 classes have no field training data** (`studio_only_classes`).
+- **Some classes have no field training data** (`studio_only_classes`).
   Diagnoses carry `fieldValidated: false` for these; the frontend hedges
   visibly on them.
-- **Field accuracy is 65.3%.** The `/feedback` loop is the long-term fix
-  (`project_context.md` §3 step 6). Until then, the 0.95 confidence
-  threshold means a large share of real photos will come back `uncertain` —
-  that is the intended behavior, not a bug.
+- **Field accuracy is 54.4% on the current `v2-vertical` model** (30 classes,
+  deduplicated test set). Studio is 96.8% and vertical 95.1%, but studio is
+  the unrealistic domain and vertical covers only 4 classes — field is the
+  honest proxy for a real photo. The `/feedback` loop is the long-term fix
+  (`project_context.md` §3 step 6).
+- **The 0.91 threshold answers ~22% of photos.** At that gate accepted
+  predictions are ~91% correct; the rest come back `uncertain`. That is the
+  intended behavior, not a bug. The threshold is a product tradeoff, not a
+  training result — re-fit it in about a minute, no GPU and no retraining:
+
+  ```bash
+  python -m ml.recalibrate backend/models/<version> --target 0.90 --write
+  python -m ml.bundle pack backend/models/<version> --version <version>   # hashes change
+  ```
+
+  Raising the target buys accuracy and loses coverage: 0.95 answers ~15% at
+  ~96%, while 0.80 answers ~38% at ~84%.
+- **Four requested crops have no training data at all**: kale, spinach,
+  arugula, mint, cilantro, thyme, microgreens. Photos of those are forced
+  into the nearest available class. See `ml/taxonomy.py::UNCOVERED_TARGETS`.

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,13 +62,25 @@ def _find_dir(root: Path, *names: str) -> Path | None:
 
     Kaggle/HF archives vary in how deeply they nest and in casing, so the
     adapters look for a landmark folder rather than assuming a fixed path.
+
+    `names` is a PRIORITY ORDER, not a set: the first name that matches
+    anywhere wins. PlantWild depends on this. It ships a v1 `plantwild/` flat
+    dump alongside the usable `plantwild_v2/`, and the directory it extracts
+    into is itself named `plantwild` — so treating the names as an unordered
+    set matched the wrapper directory and returned a level of the tree with
+    no class folders in it, yielding zero images without an error.
     """
-    wanted = {n.lower() for n in names}
-    if root.name.lower() in wanted:
-        return root
-    for p in root.rglob("*"):
-        if p.is_dir() and p.name.lower() in wanted:
-            return p
+    for name in names:
+        wanted = name.lower()
+        if root.name.lower() == wanted:
+            return root
+        matches = [
+            p for p in root.rglob("*") if p.is_dir() and p.name.lower() == wanted
+        ]
+        if matches:
+            # Shallowest wins, ties broken lexicographically, so a nested
+            # duplicate cannot make the choice vary between runs.
+            return min(matches, key=lambda p: (len(p.parts), str(p)))
     return None
 
 
@@ -228,6 +241,66 @@ SOURCE_REFS = {
     "lettuce_greenhouse": ("kaggle", "wingsdong/lettuce-diseases-and-pests"),
     "plantwild": ("hf", "uqtwei2/PlantWild"),
 }
+
+# Sources that arrive as archives rather than as a directory tree. HuggingFace
+# `snapshot_download` hands back the repo's *files*, so PlantWild lands as two
+# zips and every adapter that expects folders silently finds nothing.
+#
+# The value picks which archive to use when a repo ships several. PlantWild
+# ships both: `plantwild.zip` is the v1 flat `images/` dump with no class
+# folders (unusable — the labels live in a separate annotation file), while
+# `plantwild_v2.zip` has the `plantwild_v2/<plant> <disease>/` layout
+# `load_plantwild` reads. Extracting both would also leave `_find_dir`
+# choosing between two landmark directories.
+SOURCE_ARCHIVES = {
+    "plantwild": "plantwild_v2.zip",
+}
+
+
+def ensure_extracted(name: str, root: Path, cache: Path) -> Path:
+    """Unpack an archive-shaped source, returning the directory to scan.
+
+    A no-op for sources that already arrive as directories, so it is safe to
+    call for every source. Extraction goes to `cache/extracted/<name>` rather
+    than into the download directory, because the HuggingFace cache is
+    content-addressed and writing into a snapshot corrupts its bookkeeping.
+    """
+    root = Path(root)
+    archives = sorted(root.glob("*.zip"))
+    if not archives:
+        return root
+
+    preferred = SOURCE_ARCHIVES.get(name)
+    if preferred:
+        archives = [a for a in archives if a.name == preferred]
+        if not archives:
+            raise FileNotFoundError(
+                f"{name}: expected {preferred} in {root}; found "
+                f"{[p.name for p in sorted(root.glob('*.zip'))]}"
+            )
+
+    dest = Path(cache) / "extracted" / name
+    # A marker file, not just dest.exists(): an extraction interrupted halfway
+    # leaves a directory that looks complete and would train on partial data.
+    marker = dest / ".extraction-complete"
+    if marker.exists():
+        log.info("%-20s already extracted at %s", name, dest)
+        return dest
+
+    dest.mkdir(parents=True, exist_ok=True)
+    for archive in archives:
+        log.info("extracting %s -> %s (this takes a minute)", archive.name, dest)
+        with zipfile.ZipFile(archive) as zf:
+            for member in zf.infolist():
+                target = Path(member.filename)
+                if target.is_absolute() or ".." in target.parts:
+                    raise ValueError(
+                        f"{archive.name} contains an unsafe path: {member.filename}"
+                    )
+            zf.extractall(dest)
+    marker.write_text("\n".join(a.name for a in archives))
+    return dest
+
 
 # Sources whose download cost is wildly out of proportion to what they yield.
 EXPENSIVE_SOURCES = {

@@ -161,7 +161,17 @@ PLANTWILD_MAP: dict[str, str] = {
 # actual vertical NFT system, and the only source of nutrient-deficiency
 # classes.
 LETTUCE_HYDRO_MAP: dict[str, str] = {
+    # The folder names as they actually ship in kagglehub version 2. These are
+    # the ones that matter; the spellings below are aliases kept for other
+    # redistributions. Getting these wrong is expensive and silent: an
+    # unmapped folder is skipped, and because this is the ONLY true vertical
+    # source, mismatched keys once dropped 147 of 209 images and three whole
+    # classes while the run still looked healthy.
     "Healthy": "Lettuce___healthy",
+    "N Deficient": "Lettuce___Nitrogen_deficiency",
+    "K Deficient": "Lettuce___Potassium_deficiency",
+    "Wilt fungal": "Lettuce___Wilt",
+    # Alternate spellings seen in other redistributions of this dataset.
     "N deficiency": "Lettuce___Nitrogen_deficiency",
     "K deficiency": "Lettuce___Potassium_deficiency",
     "Wilt": "Lettuce___Wilt",

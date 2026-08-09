@@ -55,6 +55,7 @@ from ml.sources import (
     SOURCE_REFS,
     Sample,
     collect,
+    ensure_extracted,
 )
 from ml.taxonomy import (
     CLASS_INDEX,
@@ -66,7 +67,8 @@ from ml.taxonomy import (
 
 log = logging.getLogger("train_vertical")
 
-# The deployment domain. Everything else is a proxy for it.
+# The deployment domain. Everything else is a proxy for it. Note that it is
+# not used alone for selection — see --selection-domains for why.
 SELECTION_DOMAIN = DOMAIN_VERTICAL
 
 
@@ -76,7 +78,11 @@ SELECTION_DOMAIN = DOMAIN_VERTICAL
 
 
 def stratified_split(
-    samples: list[Sample], fracs: tuple[float, ...], seed: int
+    samples: list[Sample],
+    fracs: tuple[float, ...],
+    seed: int,
+    domain_fracs: dict[str, tuple[float, ...]] | None = None,
+    groups: list[int] | None = None,
 ) -> list[list[int]]:
     """Split indices per (label, domain) so every bucket keeps its mix.
 
@@ -84,6 +90,21 @@ def stratified_split(
     healthy exists in both `vertical` and nothing else, while tomato healthy
     is overwhelmingly `studio`. Stratifying on label alone would put all the
     vertical lettuce in one split by chance.
+
+    `domain_fracs` overrides the ratio for a specific domain. The vertical
+    domain is ~200 images against studio's ~22k, yet every decision that
+    matters — checkpoint selection, temperature, the confidence threshold —
+    is made on its holdout. A 10% slice of 200 is 20 images, which is too few
+    to fit a threshold against; giving it a larger holdout buys real
+    resolution and costs training images that are oversampled 12x anyway.
+
+    `groups` assigns each sample a near-duplicate group id (see `ml.dedup`).
+    A group is allocated whole, never split, so a burst of photographs of one
+    plant cannot appear on both sides of the train/val boundary. Without it
+    the vertical score measures recall of memorised images: it reaches ~0.96
+    F1 within two epochs and the confidence threshold is then fitted against
+    that fiction. Samples default to their own singleton group, which
+    reproduces plain per-image stratification.
     """
     buckets: dict[tuple[str, str], list[int]] = defaultdict(list)
     for i, s in enumerate(samples):
@@ -92,29 +113,34 @@ def stratified_split(
     rng = random.Random(seed)
     out: list[list[int]] = [[] for _ in fracs]
     for key in sorted(buckets):
-        idx = buckets[key][:]
-        rng.shuffle(idx)
+        _, domain = key
+        # A separate name, not a rebind of `fracs`: rebinding would leak the
+        # override onto every bucket processed after the first vertical one.
+        bucket_fracs = (domain_fracs or {}).get(domain, fracs)
+        idx = buckets[key]
+
+        members: dict[int, list[int]] = defaultdict(list)
+        for i in idx:
+            members[groups[i] if groups else i].append(i)
+        order = sorted(members)
+        rng.shuffle(order)
+
+        # Largest groups first: placing a 30-image burst after the small
+        # groups would blow past whichever target it lands on. Ties broken by
+        # the shuffled order so the result still varies with the seed.
+        rank = {gid: pos for pos, gid in enumerate(order)}
+        order.sort(key=lambda g: (-len(members[g]), rank[g]))
+
         n = len(idx)
-        # Guarantee at least one sample in the first split for tiny buckets,
-        # otherwise a 4-image class can vanish from training entirely.
-        cuts = []
-        acc = 0.0
-        for f in fracs[:-1]:
-            acc += f
-            cuts.append(int(round(n * acc)))
-        pieces = []
-        prev = 0
-        for c in cuts:
-            pieces.append(idx[prev:c])
-            prev = c
-        pieces.append(idx[prev:])
-        if not pieces[0] and n:
-            for p in pieces[1:]:
-                if p:
-                    pieces[0].append(p.pop())
-                    break
-        for dst, piece in zip(out, pieces):
-            dst += piece
+        targets = [n * f for f in bucket_fracs]
+        counts = [0.0] * len(fracs)
+        for gid in order:
+            group = members[gid]
+            # Whichever split is furthest below its quota takes the group, so
+            # a bucket too small to fill every split still fills train first.
+            k = max(range(len(fracs)), key=lambda j: targets[j] - counts[j])
+            out[k] += group
+            counts[k] += len(group)
     return out
 
 
@@ -322,8 +348,45 @@ def main(argv=None) -> int:
     ap.add_argument("--weight-decay", type=float, default=1e-4)
     ap.add_argument("--label-smoothing", type=float, default=0.1)
     ap.add_argument("--vertical-boost", type=float, default=12.0)
+    ap.add_argument(
+        "--vertical-holdout",
+        type=float,
+        default=0.2,
+        help=(
+            "Fraction of vertical images held out for val AND for test "
+            "(0.2 => 60/20/20). Larger than the 10%% used for studio/field "
+            "because every selection and calibration decision is made on it."
+        ),
+    )
     ap.add_argument("--early-stop-patience", type=int, default=6)
+    ap.add_argument(
+        "--no-dedup",
+        action="store_true",
+        help=(
+            "Split per image instead of per subject. The vertical source is "
+            "burst photography, so this leaks near-identical frames across "
+            "the split and inflates every vertical number. Diagnostic only."
+        ),
+    )
+    ap.add_argument(
+        "--dedup-threshold",
+        type=int,
+        default=5,
+        help="Max dHash Hamming distance (of 64) counted as the same subject",
+    )
     ap.add_argument("--target-selective-accuracy", type=float, default=0.90)
+    ap.add_argument(
+        "--selection-domains",
+        default=f"{DOMAIN_VERTICAL},{DOMAIN_FIELD}",
+        help=(
+            "Domains whose mean macro-F1 selects the checkpoint and fits the "
+            "calibration. Vertical alone is ~40 held-out images covering 4 of "
+            "30 classes, so it is far too noisy to early-stop on: it peaked "
+            "by luck at epoch 3 and stopped a run whose field score was still "
+            "climbing 18 F1 points later. Pooling with field keeps the target "
+            "domain in charge without letting noise end the run."
+        ),
+    )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--cache", type=Path, default=Path.home() / ".cache/agrivert")
     ap.add_argument(
@@ -361,6 +424,10 @@ def main(argv=None) -> int:
             return 1
         roots.update(download_sources(missing, args.cache))
 
+    # Applied to --root paths too, not just downloads: a source handed over as
+    # a local path is just as likely to still be zipped.
+    roots = {n: ensure_extracted(n, p, args.cache) for n, p in roots.items()}
+
     samples = collect(roots)
     if not samples:
         log.error("no images matched the taxonomy — check the source paths")
@@ -386,7 +453,49 @@ def main(argv=None) -> int:
         )
 
     # ---- split -----------------------------------------------------------
-    train_idx, val_idx, test_idx = stratified_split(samples, (0.8, 0.1, 0.1), args.seed)
+    # ---- near-duplicate grouping ----------------------------------------
+    groups = None
+    if not args.no_dedup:
+        from ml.dedup import compute_hashes, group_within_buckets
+
+        hashed = compute_hashes(
+            [s.path for s in samples],
+            cache_file=args.cache / "dedup-hashes.json",
+            workers=max(2, args.workers // 2),
+        )
+        groups = group_within_buckets(
+            [(s.label, s.domain) for s in samples],
+            [hashed.get(str(s.path)) for s in samples],
+            args.dedup_threshold,
+        )
+        for domain in (DOMAIN_STUDIO, DOMAIN_FIELD, DOMAIN_VERTICAL):
+            in_domain = [i for i, s in enumerate(samples) if s.domain == domain]
+            if not in_domain:
+                continue
+            distinct = len({groups[i] for i in in_domain})
+            log.info(
+                "  %-8s %5d images -> %5d distinct subjects (%.0f%% are "
+                "near-duplicates of another)",
+                domain,
+                len(in_domain),
+                distinct,
+                100 * (1 - distinct / len(in_domain)),
+            )
+
+    vertical_holdout = args.vertical_holdout
+    train_idx, val_idx, test_idx = stratified_split(
+        samples,
+        (0.8, 0.1, 0.1),
+        args.seed,
+        domain_fracs={
+            DOMAIN_VERTICAL: (
+                1.0 - 2 * vertical_holdout,
+                vertical_holdout,
+                vertical_holdout,
+            )
+        },
+        groups=groups,
+    )
     log.info(
         "split: train=%d val=%d test=%d", len(train_idx), len(val_idx), len(test_idx)
     )
@@ -494,10 +603,13 @@ def main(argv=None) -> int:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     history, best_score, best_epoch, patience = [], -1.0, -1, 0
-    selection_domain = (
-        SELECTION_DOMAIN if SELECTION_DOMAIN in val_loaders else DOMAIN_FIELD
+    selection_domains = [
+        d for d in args.selection_domains.split(",") if d and d in val_loaders
+    ] or [DOMAIN_FIELD]
+    log.info(
+        "selecting checkpoints on: mean macro-F1 over %s",
+        ", ".join(f"val/{d}" for d in selection_domains),
     )
-    log.info("selecting checkpoints on: val/%s macro-F1", selection_domain)
 
     total_epochs = args.head_epochs + args.finetune_epochs
     for epoch in range(total_epochs):
@@ -570,7 +682,9 @@ def main(argv=None) -> int:
             ),
         )
 
-        score = entry.get(f"val_{selection_domain}_macro_f1", 0.0)
+        parts = [entry.get(f"val_{d}_macro_f1", 0.0) for d in selection_domains]
+        score = sum(parts) / len(parts)
+        entry["selection_score"] = score
         if score > best_score:
             best_score, best_epoch, patience = score, epoch, 0
             save_checkpoint(
@@ -591,12 +705,29 @@ def main(argv=None) -> int:
     load_checkpoint_into(model, args.out_dir / "best.pt", map_location=device)
     model.to(device)
 
-    cal_domain = selection_domain
+    # Calibrate on the selection domains POOLED rather than on vertical alone.
+    # Vertical is ~40 held-out images covering 4 of 30 classes; a threshold
+    # fitted there saw almost no hard cases, recommended 0.3, and would have
+    # accepted essentially every prediction in production — including the
+    # field-domain ones the model gets wrong about a third of the time.
+    cal_label = "+".join(selection_domains)
+
+    def _pooled_loader(indices):
+        return DataLoader(
+            Dataset(
+                [i for i in indices if samples[i].domain in selection_domains],
+                eval_tf,
+            ),
+            batch_size=args.batch_size * 2,
+            shuffle=False,
+            **common,
+        )
+
     _, _, val_logits, val_targets = evaluate(
-        model, val_loaders[cal_domain], device, num_classes
+        model, _pooled_loader(val_idx), device, num_classes
     )
     temperature = fit_temperature(val_logits, val_targets)
-    log.info("temperature %.4f (fit on val/%s)", temperature, cal_domain)
+    log.info("temperature %.4f (fit on val/%s)", temperature, cal_label)
 
     metrics = {}
     for domain, loader in test_loaders.items():
@@ -615,9 +746,9 @@ def main(argv=None) -> int:
         )
 
     sweep, recommended = [], None
-    if cal_domain in test_loaders:
+    if any(samples[i].domain in selection_domains for i in test_idx):
         _, _, t_logits, t_targets = evaluate(
-            model, test_loaders[cal_domain], device, num_classes
+            model, _pooled_loader(test_idx), device, num_classes
         )
         sweep, recommended = threshold_sweep(
             t_logits, t_targets, temperature, args.target_selective_accuracy
@@ -653,11 +784,12 @@ def main(argv=None) -> int:
         },
         "calibration": {
             "temperature": temperature,
-            "temperature_fitted_on": f"val/{cal_domain}",
+            "temperature_fitted_on": f"val/{cal_label}",
             "recommended_confidence_threshold": recommended,
             "target_selective_accuracy": args.target_selective_accuracy,
             "threshold_sweep": sweep,
-            "threshold_measured_on": f"test/{cal_domain}",
+            "threshold_measured_on": f"test/{cal_label}",
+            "selection_domains": selection_domains,
         },
         "metrics": metrics,
         "best_epoch": best_epoch,
@@ -679,7 +811,10 @@ def main(argv=None) -> int:
     (args.out_dir / "history.json").write_text(json.dumps(history, indent=2))
 
     print(f"\nwrote artifacts to {args.out_dir}")
-    print(f"  best epoch {best_epoch}, val/{selection_domain} macro-F1 {best_score:.4f}")
+    print(
+        f"  best epoch {best_epoch}, mean val macro-F1 over "
+        f"{cal_label} = {best_score:.4f}"
+    )
     print(f"  threshold {recommended}, temperature {temperature:.4f}")
     print("\nPackage for distribution:")
     print(
