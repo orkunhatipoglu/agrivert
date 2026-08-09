@@ -430,6 +430,39 @@ def build_eval_transform(image_size: int = IMAGE_SIZE):
     ])
 
 
+def build_tta_transforms(image_size: int = IMAGE_SIZE, ratios=(1.0, 1.14, 1.35)):
+    """Multi-scale views for test-time averaging. Returns [(transform, flip)].
+
+    Eval keeps only the centre square: the short side is resized to
+    `image_size * ratio` and then centre-cropped, so a 4:3 photo loses ~42% of
+    its area and a 16:9 photo ~57%. Which pixels survive therefore depends on
+    the framing, and re-cropping a photo by a few percent slides that window —
+    on held-out field photos, 31% of them changed predicted class under a <=10%
+    crop, with confidence swinging 0.15 on average.
+
+    Averaging over several zoom levels shrinks that: flips fall to ~20% and the
+    mean swing to ~0.11. Be clear about what this does and does not buy —
+    it costs `len(ratios)`x inference and does **not** improve accuracy (on
+    val it measured slightly worse, 58.4% vs 60.8%). It buys stability only.
+    The instability itself is mostly the model being ~55% accurate on field
+    photos: near the decision boundary, small input changes flip the argmax.
+    """
+    return [(build_eval_transform_at(image_size, r), False) for r in ratios]
+
+
+def build_eval_transform_at(image_size: int, ratio: float):
+    """Eval transform at an explicit resize ratio (see build_tta_transforms)."""
+    import albumentations as A
+    from albumentations.pytorch import ToTensorV2
+
+    return A.Compose([
+        A.SmallestMaxSize(max_size=int(round(image_size * ratio))),
+        A.CenterCrop(height=image_size, width=image_size),
+        A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ToTensorV2(),
+    ])
+
+
 def describe_transform(tf) -> list[str]:
     """Flat list of the transform class names actually constructed."""
     names = []

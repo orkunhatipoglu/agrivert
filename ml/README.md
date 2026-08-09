@@ -13,7 +13,7 @@ just download the result:
 python -m ml.bundle fetch \
   https://github.com/orkunhatipoglu/agrivert/releases/download/v2-vertical-20260809/v2-vertical-20260809.tar.gz \
   --into backend/models \
-  --sha256 32dd73135885db79ef0a712b71e70fbcb3f89f6d4f537641a0a62fe6219f8a9d
+  --sha256 3faba3371886d2d7124337613f0d3aec3e7b7270f71be256e61b1f8fcde78def
 ```
 
 That is the whole install. No GPU, no Kaggle account, no dataset downloads.
@@ -34,8 +34,9 @@ mixing a new URL with an old hash — `bundle fetch` will refuse the mismatch.
 | Size | 8.6 MB |
 | Classes | 30 |
 | Accuracy | studio 96.8% / field 54.4% / vertical 95.1% |
-| Confidence threshold | 0.91 |
-| sha256 | `32dd73135885db79ef0a712b71e70fbcb3f89f6d4f537641a0a62fe6219f8a9d` |
+| Confidence threshold | 0.955 — answers 14.8% of photos at 95.8% (95% CI 88.5–98.6) |
+| Meets its 90% bar | **No.** See "The threshold does not meet the declared bar" below |
+| sha256 | `3faba3371886d2d7124337613f0d3aec3e7b7270f71be256e61b1f8fcde78def` |
 
 Releases: <https://github.com/orkunhatipoglu/agrivert/releases>
 
@@ -53,7 +54,7 @@ this file and in `backend/README.md`.
 ```bash
 gh release create v2-vertical-20260809 dist/v2-vertical-20260809.* \
   --title "Vertical-ag model v2" \
-  --notes "30 classes. studio 96.8% / field 54.4% / vertical 95.1% (n=41). Threshold 0.91."
+  --notes "30 classes. studio 96.8% / field 54.4% / vertical 95.1% (n=41). Threshold 0.955."
 ```
 
 Without `gh` installed, the same thing via
@@ -117,7 +118,8 @@ reported success.
 | `--vertical-holdout` | 0.2 | Vertical uses 60/20/20; studio and field use 80/10/10. |
 | `--no-dedup` | off | Split per image instead of per subject. Diagnostic only — it inflates every vertical number. |
 | `--dedup-threshold` | 5 | dHash Hamming distance (of 64) counted as the same subject. |
-| `--target-selective-accuracy` | 0.90 | Accuracy the recommended threshold must reach on accepted predictions. |
+| `--target-selective-accuracy` | 0.90 | Accuracy the recommended threshold must reach on accepted predictions — judged on the 95% CI **lower bound**, fitted on val, verified on test. This model does not reach it; see below. |
+| `--min-accepted` | 40 | Ignore gates accepting fewer val images than this. 100% accuracy on 6 photos is not a measurement. |
 
 ### Domains
 
@@ -156,6 +158,79 @@ Report the leakage in any dataset directly:
 ```bash
 python -m ml.dedup /path/to/dataset --threshold 5
 ```
+
+### The threshold does not meet the declared bar
+
+`--target-selective-accuracy` is 0.90. **No threshold reaches it.** The best
+any gate can defend on validation data is a 80.7% lower bound. `metadata.json`
+records `meets_target: false`, `predict.py` returns it on every diagnosis, and
+nothing in this project may advertise 90%.
+
+This was hidden by a calibration bug worth understanding, because the shape of
+it recurs. The threshold was **fitted on the test split**, and that same
+split's selective accuracy was then reported as the expected quality. The
+report could not fail: the number being quoted was exactly the quantity the
+fit maximised. Measured properly, the shipped 0.91 gate looked like this:
+
+| | coverage | selective accuracy |
+|---|---|---|
+| test split (where it was fitted) | 22.3% | **90.8%** ← the claim |
+| val split (never seen by the fit) | 17.7% | **86.4%** ← reality |
+
+Two rules now prevent it, both enforced by `backend/tests/test_calibration.py`:
+
+* **Fit on val, verify on test.** `metadata.json` carries `threshold_fitted_on`
+  and `threshold_verified_on`, and `calibration.verified` holds the only
+  selective-accuracy figure that is a measurement rather than a fitted
+  quantity. Quote that one.
+* **Judge a gate by the lower bound of its 95% CI, not the point estimate.**
+  With ~90 accepted images a measured 91% reaches below 83%; selecting on the
+  point estimate picks whichever threshold got lucky, and luck does not
+  survive new photos. `--min-accepted` (default 40) additionally discards
+  gates too small to measure at all — 100% on 6 photos is not a measurement.
+
+The shipped gate uses `--policy conservative`: the most selective threshold
+still measurable, chosen because a confident wrong answer to a grower costs
+more than an honest "I can't tell". It answers **14.8%** of photos at **95.8%**
+(95% CI 88.5–98.6, n=72 verified on test). Most photos return `uncertain`.
+That is the intended behaviour.
+
+```bash
+python -m ml.recalibrate artifacts/vertical --target 0.90 --policy conservative --write
+python -m ml.recalibrate artifacts/vertical --target 0.80                        # what 80% would buy
+```
+
+Exit status is 2 when the target is missed, so CI can catch a regression that
+would otherwise only show up as a slightly nicer-looking number.
+
+### Why confidence moves when you re-crop a photo
+
+Re-cropping a photo by a few percent can swing its confidence by 0.3 and
+change the predicted class outright. On held-out field photos, **31% changed
+class under a ≤10% crop**, with a mean confidence swing of 0.15.
+
+Two causes, and the first is not a bug so much as a consequence:
+
+1. **Eval keeps only the centre square.** `build_eval_transform` resizes the
+   short side to 255 and centre-crops 224, so a 4:3 photo loses ~42% of its
+   area and a 16:9 photo ~57%. Re-cropping slides that window over different
+   pixels.
+2. **The model is ~55% accurate on field photos.** Near the decision boundary
+   a small input change flips the argmax. This dominates, and no preprocessing
+   change fixes it — only a better model does.
+
+`build_tta_transforms` averages three zoom levels and cuts flips to ~20% and
+the mean swing to ~0.11. It is **off by default** and worth being precise
+about what it buys: 3× inference cost, materially steadier confidence, and
+**no accuracy gain** — on val it measured slightly *worse* (58.4% vs 60.8%).
+
+```python
+DiseaseClassifier(model_dir, tta=True)      # steadier, 3x cost
+```
+
+Feeding the whole frame instead (`squash`/`pad-to-square`) is worse still —
+45.0% and 50.1% field accuracy against 54.4% — because the model was trained
+on `RandomResizedCrop` views and a full frame is out of distribution for it.
 
 ### Known coverage gaps
 

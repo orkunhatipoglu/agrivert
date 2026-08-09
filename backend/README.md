@@ -89,7 +89,7 @@ pip install -r requirements.txt
 python -m ml.bundle fetch \
   https://github.com/orkunhatipoglu/agrivert/releases/download/v2-vertical-20260809/v2-vertical-20260809.tar.gz \
   --into models \
-  --sha256 32dd73135885db79ef0a712b71e70fbcb3f89f6d4f537641a0a62fe6219f8a9d
+  --sha256 3faba3371886d2d7124337613f0d3aec3e7b7270f71be256e61b1f8fcde78def
 
 # Only if you trained it yourself: register a local artifacts dir instead.
 python scripts/register_model.py ../artifacts/vertical --version v2-vertical-20260809 --activate
@@ -162,18 +162,41 @@ auth.set_custom_user_claims(uid, {"admin": True})
   the unrealistic domain and vertical covers only 4 classes — field is the
   honest proxy for a real photo. The `/feedback` loop is the long-term fix
   (`project_context.md` §3 step 6).
-- **The 0.91 threshold answers ~22% of photos.** At that gate accepted
-  predictions are ~91% correct; the rest come back `uncertain`. That is the
-  intended behavior, not a bug. The threshold is a product tradeoff, not a
-  training result — re-fit it in about a minute, no GPU and no retraining:
+- **The model misses its own declared quality bar, and says so.**
+  `target_selective_accuracy` is 0.90 and no threshold reaches it — the best
+  any gate can defend on validation data is a 80.7% lower bound. Every
+  prediction carries `meets_target: false` plus `expected_accuracy` and
+  `expected_accuracy_95ci`. **The frontend must not advertise 90%**, and
+  should treat `meets_target: false` as a reason to hedge harder.
+
+  A previous version *did* claim 90.8%, because the threshold was fitted on
+  the test split and that split's accuracy was then quoted as the expected
+  quality — circular, since the fit maximises the number being reported. It
+  now fits on val and verifies on test. See `ml/README.md` for the full
+  writeup; the gap was 90.8% claimed vs 86.4% real.
+
+- **The 0.955 threshold answers ~15% of photos**, at 95.8% accuracy
+  (95% CI 88.5–98.6, n=72, measured on data the threshold was not fitted on).
+  The other ~85% come back `uncertain`. That is the intended behavior: this
+  gate is deliberately conservative because a confident wrong answer to a
+  grower costs more than an honest "I can't tell". Re-fit it in about a
+  minute, no GPU and no retraining:
 
   ```bash
-  python -m ml.recalibrate backend/models/<version> --target 0.90 --write
+  python -m ml.recalibrate backend/models/<version> --target 0.90 --policy conservative --write
   python -m ml.bundle pack backend/models/<version> --version <version>   # hashes change
   ```
 
-  Raising the target buys accuracy and loses coverage: 0.95 answers ~15% at
-  ~96%, while 0.80 answers ~38% at ~84%.
+  `--policy max-coverage` trades the other way: threshold 0.785, answering
+  ~39% at ~84% (CI 77.7–88.2). Exit status is 2 whenever the target is missed.
+
+- **`confidence` is this photo's score, not a success rate.** Showing it to a
+  user as "the model is 94% sure" overstates things badly — a ≤10% re-crop
+  changes the predicted class on 31% of field photos and swings confidence by
+  0.15 on average. `expected_accuracy` is the number that describes how often
+  an accepted prediction is actually right. `DiseaseClassifier(dir, tta=True)`
+  averages 3 zoom levels for steadier confidence at 3x cost and no accuracy
+  gain; it is off by default.
 - **Four requested crops have no training data at all**: kale, spinach,
   arugula, mint, cilantro, thyme, microgreens. Photos of those are forced
   into the nearest available class. See `ml/taxonomy.py::UNCOVERED_TARGETS`.

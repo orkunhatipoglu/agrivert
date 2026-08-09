@@ -270,12 +270,50 @@ def fit_temperature(logits, targets) -> float:
     return float(log_t.exp().item())
 
 
-def threshold_sweep(logits, targets, temperature: float, target_accuracy: float):
-    """Confidence threshold vs coverage on held-out data.
+def selective_report(logits, targets, temperature: float, threshold: float) -> dict:
+    """Coverage and selective accuracy at one threshold, with a 95% CI."""
+    import torch
 
-    Picks the lowest threshold reaching `target_accuracy` on accepted
-    predictions while keeping >=15% coverage — a threshold that hits 99% by
-    rejecting 95% of photos is useless to a grower.
+    if logits.numel() == 0:
+        return {"threshold": threshold, "coverage": 0.0, "n_accepted": 0,
+                "selective_accuracy": 0.0, "selective_accuracy_95ci": [0.0, 0.0]}
+    probs = torch.softmax(logits / temperature, dim=1)
+    confidence, preds = probs.max(1)
+    accepted = confidence >= threshold
+    n = int(accepted.sum())
+    hits = int((preds == targets)[accepted].sum())
+    lo, hi = wilson_interval(hits, n)
+    return {
+        "threshold": round(float(threshold), 4),
+        "coverage": n / len(targets),
+        "n_accepted": n,
+        "selective_accuracy": (hits / n) if n else 0.0,
+        "selective_accuracy_95ci": [lo, hi],
+    }
+
+
+def threshold_sweep(
+    logits,
+    targets,
+    temperature: float,
+    target_accuracy: float,
+    min_accepted: int = 40,
+):
+    """Confidence threshold vs coverage, and the lowest threshold we can defend.
+
+    Two rules, both learned the hard way:
+
+    * **Judge by the lower bound of the CI, not the point estimate.** With ~90
+      accepted images, a threshold that measures 91% has a 95% interval
+      reaching down past 83%. Selecting on the point estimate means picking
+      whichever threshold got lucky, and the luck does not survive contact with
+      new photos. Requiring the *lower* bound to clear the target is the same
+      question asked honestly.
+    * **Ignore thresholds accepting fewer than `min_accepted` images.** 100%
+      accuracy on 6 photos is not a measurement.
+
+    Returns `(sweep, recommended)`; `recommended` is None when nothing clears
+    the bar, which is a real answer and must not be papered over.
     """
     import torch
 
@@ -287,20 +325,23 @@ def threshold_sweep(logits, targets, temperature: float, target_accuracy: float)
     correct = preds == targets
 
     sweep, recommended = [], None
-    for t in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95):
+    for step in range(30, 100):
+        t = step / 100
         accepted = confidence >= t
         n = int(accepted.sum())
-        coverage = n / len(targets)
-        selective = float(correct[accepted].float().mean()) if n else 0.0
+        hits = int(correct[accepted].sum())
+        lo, hi = wilson_interval(hits, n)
         sweep.append(
             {
                 "threshold": t,
-                "coverage": coverage,
+                "coverage": n / len(targets),
                 "n_accepted": n,
-                "selective_accuracy": selective,
+                "selective_accuracy": (hits / n) if n else 0.0,
+                "selective_accuracy_95ci": [lo, hi],
+                "reliable": n >= min_accepted,
             }
         )
-        if recommended is None and selective >= target_accuracy and coverage >= 0.15:
+        if recommended is None and n >= min_accepted and lo >= target_accuracy:
             recommended = t
     return sweep, recommended
 
@@ -375,6 +416,15 @@ def main(argv=None) -> int:
         help="Max dHash Hamming distance (of 64) counted as the same subject",
     )
     ap.add_argument("--target-selective-accuracy", type=float, default=0.90)
+    ap.add_argument(
+        "--min-accepted",
+        type=int,
+        default=40,
+        help=(
+            "Ignore thresholds accepting fewer than this many val images. "
+            "A 99%% accuracy measured on 6 photos is not a measurement."
+        ),
+    )
     ap.add_argument(
         "--selection-domains",
         default=f"{DOMAIN_VERTICAL},{DOMAIN_FIELD}",
@@ -745,21 +795,61 @@ def main(argv=None) -> int:
             domain, n, acc, lo, hi, f1,
         )
 
-    sweep, recommended = [], None
+    # The threshold is FITTED ON VAL and VERIFIED ON TEST.
+    #
+    # It used to be fitted on the test split, and that split's selective
+    # accuracy was then quoted as the expected quality. That is circular: the
+    # threshold is chosen to maximise exactly the number being reported, so the
+    # report cannot fail. Measured on this model, the gap was not academic —
+    # the test-fitted 0.91 read 90.8% on the split it was fitted on and 86.4%
+    # on data it had not seen, at 17.7% coverage rather than 22.3%.
+    sweep, recommended = threshold_sweep(
+        val_logits,
+        val_targets,
+        temperature,
+        args.target_selective_accuracy,
+        args.min_accepted,
+    )
+    verified = None
     if any(samples[i].domain in selection_domains for i in test_idx):
         _, _, t_logits, t_targets = evaluate(
             model, _pooled_loader(test_idx), device, num_classes
         )
-        sweep, recommended = threshold_sweep(
-            t_logits, t_targets, temperature, args.target_selective_accuracy
+        if recommended is not None:
+            verified = selective_report(t_logits, t_targets, temperature, recommended)
+
+    meets_target = recommended is not None
+    if not meets_target:
+        # Not a fallback so much as a refusal: no gate reaches the requested
+        # quality, so pick the most selective one we can still measure and
+        # record that the target was missed. Serving reads `meets_target` and
+        # must not advertise an accuracy this model does not have.
+        # Best *defensible* gate (highest CI lower bound), not merely the most
+        # selective one — the latter just tracks --min-accepted and buys a
+        # wide-interval accuracy measured on a handful of photos.
+        usable = [r for r in sweep if r["reliable"]]
+        recommended = (
+            max(usable, key=lambda r: r["selective_accuracy_95ci"][0])["threshold"]
+            if usable
+            else 0.95
         )
-    if recommended is None:
-        recommended = 0.95
+        if any(samples[i].domain in selection_domains for i in test_idx):
+            verified = selective_report(t_logits, t_targets, temperature, recommended)
         log.warning(
-            "no threshold reached %.0f%% selective accuracy with >=15%% "
-            "coverage; defaulting to 0.95. Most photos will return "
-            "'uncertain' — that is honest, not a bug.",
-            args.target_selective_accuracy * 100,
+            "NO threshold reaches %.0f%% selective accuracy (95%% CI lower "
+            "bound) on >=%d val images. Using %.2f, the most selective gate "
+            "still measurable. This model does not meet the declared bar — "
+            "metadata records meets_target=false; do not quote the target.",
+            args.target_selective_accuracy * 100, args.min_accepted, recommended,
+        )
+    if verified is not None:
+        log.info(
+            "threshold %.2f: fitted on val, verified on test -> coverage %.1f%% "
+            "(n=%d), selective accuracy %.1f%% (95%% CI %.1f-%.1f)",
+            recommended, verified["coverage"] * 100, verified["n_accepted"],
+            verified["selective_accuracy"] * 100,
+            verified["selective_accuracy_95ci"][0] * 100,
+            verified["selective_accuracy_95ci"][1] * 100,
         )
 
     field_classes = {
@@ -788,7 +878,18 @@ def main(argv=None) -> int:
             "recommended_confidence_threshold": recommended,
             "target_selective_accuracy": args.target_selective_accuracy,
             "threshold_sweep": sweep,
-            "threshold_measured_on": f"test/{cal_label}",
+            "threshold_fitted_on": f"val/{cal_label}",
+            # The only selective-accuracy number that is a measurement rather
+            # than a fitted quantity. Quote this one.
+            "threshold_verified_on": f"test/{cal_label}",
+            "verified": verified,
+            "meets_target": meets_target,
+            "min_accepted": args.min_accepted,
+            "selection_rule": (
+                "lowest threshold whose 95% CI lower bound on selective "
+                f"accuracy reaches {args.target_selective_accuracy:.0%} on "
+                f">={args.min_accepted} val images of {cal_label}"
+            ),
             "selection_domains": selection_domains,
         },
         "metrics": metrics,
