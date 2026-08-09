@@ -120,7 +120,7 @@ python -m pytest tests/ -q
 ```
 
 Covers upload validation (including the truncated-JPEG case that
-`project_context.md` §2.9 bug #5) and registry
+`Image.verify()` misses — `project_context.md` §2.9 bug #5) and registry
 resolution. Firebase and torch are not exercised; those need real
 credentials and a real GPU.
 
