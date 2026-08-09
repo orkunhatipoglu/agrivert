@@ -96,13 +96,6 @@ verdict.
 separator dimmed but not removed. It's the exact string the feedback endpoint
 validates against, so tidying it would make corrections harder to get right.
 
-**Hedges are surfaced, not hidden.** Classes with `fieldValidated: false` —
-one of 31 on `v3-vertical`, and it was ten of 38 on the model before it —
-carry a visible notice, and disease KB entries say plainly that their
-agronomic content hasn't been written or reviewed. The count is a property of
-the model, not of the UI: read it from the flag, never from a number typed
-into a component.
-
 ## Scripts
 
 ```bash
