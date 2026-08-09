@@ -85,12 +85,13 @@ mkdir -p secrets              # put serviceAccount.json here (gitignored)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 
-# Path to the artifacts/ dir is wherever your training run's output lives —
-# adjust if this isn't checked out next to the agrivert-ml project.
-# Preferred: install a published model bundle (no training required)
-python -m ml.bundle fetch <bundle-url> --into models --sha256 <hash>
+# Install the published model bundle — no training, no GPU, no datasets.
+python -m ml.bundle fetch \
+  https://github.com/orkunhatipoglu/agrivert/releases/download/v2-vertical-20260809/v2-vertical-20260809.tar.gz \
+  --into models \
+  --sha256 32dd73135885db79ef0a712b71e70fbcb3f89f6d4f537641a0a62fe6219f8a9d
 
-# Or register a local artifacts dir you trained yourself
+# Only if you trained it yourself: register a local artifacts dir instead.
 python scripts/register_model.py ../artifacts/vertical --version v2-vertical-20260809 --activate
 
 python scripts/seed_diseases.py
@@ -119,7 +120,7 @@ python -m pytest tests/ -q
 ```
 
 Covers upload validation (including the truncated-JPEG case that
-`Image.verify()` misses — `project_context.md` §2.9 bug #5) and registry
+`project_context.md` §2.9 bug #5) and registry
 resolution. Firebase and torch are not exercised; those need real
 credentials and a real GPU.
 

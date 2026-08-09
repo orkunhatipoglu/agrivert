@@ -10,20 +10,54 @@ datasets and a few hours. Everyone except the person who trains it should
 just download the result:
 
 ```bash
-python -m ml.bundle fetch <bundle-url> --into backend/models --sha256 <hash>
+python -m ml.bundle fetch \
+  https://github.com/orkunhatipoglu/agrivert/releases/download/v2-vertical-20260809/v2-vertical-20260809.tar.gz \
+  --into backend/models \
+  --sha256 32dd73135885db79ef0a712b71e70fbcb3f89f6d4f537641a0a62fe6219f8a9d
 ```
 
-That downloads, verifies the archive hash and every file hash inside it, and
+That is the whole install. No GPU, no Kaggle account, no dataset downloads.
+It downloads, verifies the archive hash and every file hash inside it, and
 installs it as a model version the backend resolves immediately. A truncated
 download fails loudly rather than serving a model that loads and predicts
-garbage.
+garbage — which is why the `--sha256` is worth pasting rather than omitting.
 
-To publish a bundle after training:
+The hash above belongs to **that specific tag**. Both change together on every
+release, so copy the pair from the release page you are installing rather than
+mixing a new URL with an old hash — `bundle fetch` will refuse the mismatch.
+
+### Current release
+
+| | |
+|---|---|
+| Tag | `v2-vertical-20260809` |
+| Size | 8.6 MB |
+| Classes | 30 |
+| Accuracy | studio 96.8% / field 54.4% / vertical 95.1% |
+| Confidence threshold | 0.91 |
+| sha256 | `32dd73135885db79ef0a712b71e70fbcb3f89f6d4f537641a0a62fe6219f8a9d` |
+
+Releases: <https://github.com/orkunhatipoglu/agrivert/releases>
+
+### Publishing a bundle after training
 
 ```bash
 python -m ml.bundle pack artifacts/vertical --version v2-vertical-20260809
-# upload dist/v2-vertical-20260809.tar.gz as a GitHub Release asset
 ```
+
+That writes three files to `dist/` — `.tar.gz`, `.tar.gz.sha256` and
+`.manifest.json`. **Attach all three** to a GitHub Release tagged with the same
+version string, so the download URL above resolves. Then update the hash in
+this file and in `backend/README.md`.
+
+```bash
+gh release create v2-vertical-20260809 dist/v2-vertical-20260809.* \
+  --title "Vertical-ag model v2" \
+  --notes "30 classes. studio 96.8% / field 54.4% / vertical 95.1% (n=41). Threshold 0.91."
+```
+
+Without `gh` installed, the same thing via
+<https://github.com/orkunhatipoglu/agrivert/releases/new>.
 
 ## Files
 
