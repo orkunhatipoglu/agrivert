@@ -51,9 +51,27 @@ class DiseaseClassifier:
         # What that gate is actually worth, measured on data the threshold was
         # NOT fitted on. Null for models calibrated before this was recorded —
         # callers must treat "unknown" as unknown rather than as "fine".
+        #
+        # Deliberately the WORST domain rather than the pooled figure. The
+        # held-out pool is ~2200 vertical images against ~240 field ones, so
+        # its mean (98.9%) describes the easy domain; a field photo accepted at
+        # the same gate is right 91.4% of the time. Serving cannot tell which
+        # domain an incoming photo belongs to, so quoting anything but the
+        # worst case overstates the answer it is about to give.
         verified = cal.get("verified") or {}
-        self.expected_accuracy = verified.get("selective_accuracy")
-        self.expected_accuracy_95ci = verified.get("selective_accuracy_95ci")
+        per_domain = cal.get("verified_per_domain") or {}
+        self.expected_accuracy_by_domain = {
+            d: r.get("selective_accuracy") for d, r in per_domain.items()
+        }
+        if per_domain:
+            worst = min(per_domain, key=lambda d: per_domain[d]["selective_accuracy"])
+            self.expected_accuracy = per_domain[worst]["selective_accuracy"]
+            self.expected_accuracy_95ci = per_domain[worst]["selective_accuracy_95ci"]
+            self.expected_accuracy_basis = f"worst domain ({worst})"
+        else:
+            self.expected_accuracy = verified.get("selective_accuracy")
+            self.expected_accuracy_95ci = verified.get("selective_accuracy_95ci")
+            self.expected_accuracy_basis = "pooled" if verified else None
         self.meets_target = cal.get("meets_target")
         self.target_accuracy = cal.get("target_selective_accuracy")
 
@@ -127,6 +145,11 @@ class DiseaseClassifier:
             # success rate, and reading it as one overstates the model badly.
             "expected_accuracy": self.expected_accuracy,
             "expected_accuracy_95ci": self.expected_accuracy_95ci,
+            # Which measurement `expected_accuracy` came from, and the full
+            # per-domain breakdown for callers that know more about the photo
+            # than serving does.
+            "expected_accuracy_basis": self.expected_accuracy_basis,
+            "expected_accuracy_by_domain": self.expected_accuracy_by_domain,
             # False => the model misses its own declared quality bar. Callers
             # must hedge harder and must not advertise the target accuracy.
             "meets_target": self.meets_target,

@@ -87,12 +87,12 @@ pip install -r requirements.txt
 
 # Install the published model bundle — no training, no GPU, no datasets.
 python -m ml.bundle fetch \
-  https://github.com/orkunhatipoglu/agrivert/releases/download/v2-vertical-20260809/v2-vertical-20260809.tar.gz \
+  https://github.com/orkunhatipoglu/agrivert/releases/download/v3-vertical-20260809/v3-vertical-20260809.tar.gz \
   --into models \
-  --sha256 3faba3371886d2d7124337613f0d3aec3e7b7270f71be256e61b1f8fcde78def
+  --sha256 17d5d2b48d0a9cedfc77bca7c4090d3f703ed385d33a561a929dd2d1399e52dc
 
 # Only if you trained it yourself: register a local artifacts dir instead.
-python scripts/register_model.py ../artifacts/vertical --version v2-vertical-20260809 --activate
+python scripts/register_model.py ../artifacts/vertical-v3 --version v3-vertical-20260809 --activate
 
 python scripts/seed_diseases.py
 ```
@@ -157,46 +157,53 @@ auth.set_custom_user_claims(uid, {"admin": True})
 - **Some classes have no field training data** (`studio_only_classes`).
   Diagnoses carry `fieldValidated: false` for these; the frontend hedges
   visibly on them.
-- **Field accuracy is 54.4% on the current `v2-vertical` model** (30 classes,
-  deduplicated test set). Studio is 96.8% and vertical 95.1%, but studio is
-  the unrealistic domain and vertical covers only 4 classes — field is the
-  honest proxy for a real photo. The `/feedback` loop is the long-term fix
-  (`project_context.md` §3 step 6).
-- **The model misses its own declared quality bar, and says so.**
-  `target_selective_accuracy` is 0.90 and no threshold reaches it — the best
-  any gate can defend on validation data is a 80.7% lower bound. Every
-  prediction carries `meets_target: false` plus `expected_accuracy` and
-  `expected_accuracy_95ci`. **The frontend must not advertise 90%**, and
-  should treat `meets_target: false` as a reason to hedge harder.
+- **Field accuracy is 62.2% on the current `v3-vertical` model** (31 classes,
+  deduplicated test set), up from 54.4% in v2. Studio is 99.0% and vertical
+  98.8%, but studio is the unrealistic domain and vertical is now dominated by
+  one greenhouse capture session — field remains the honest proxy for a photo
+  taken somewhere the model has never been. The `/feedback` loop is still the
+  long-term fix (`project_context.md` §3 step 6).
+- **The 0.910 gate meets the 90% bar — but read the per-domain rows, not the
+  pooled one.** Verified on data the threshold was never fitted on:
 
-  A previous version *did* claim 90.8%, because the threshold was fitted on
-  the test split and that split's accuracy was then quoted as the expected
-  quality — circular, since the fit maximises the number being reported. It
-  now fits on val and verifies on test. See `ml/README.md` for the full
-  writeup; the gap was 90.8% claimed vs 86.4% real.
+  | domain | coverage | n | selective accuracy |
+  |---|---|---|---|
+  | vertical | 96.0% | 2,177 | 99.8% (99.5–99.9) |
+  | **field** | 54.4% | 243 | **91.4%** (87.2–94.3) |
+  | ~~pooled~~ | 89.1% | 2,420 | ~~98.9%~~ — **do not quote** |
 
-- **The 0.955 threshold answers ~15% of photos**, at 95.8% accuracy
-  (95% CI 88.5–98.6, n=72, measured on data the threshold was not fitted on).
-  The other ~85% come back `uncertain`. That is the intended behavior: this
-  gate is deliberately conservative because a confident wrong answer to a
-  grower costs more than an honest "I can't tell". Re-fit it in about a
-  minute, no GPU and no retraining:
+  The pool is 2,177 vertical images against 243 field, so its mean describes
+  the easy domain. `metadata.json` carries `verified_per_domain`; the frontend
+  should surface the *field* figure, because that is what a photo taken
+  somewhere new resembles. Roughly 46% of field photos still come back
+  `uncertain`, which is intended.
+
+  This is the first version to meet its own bar. v2 could not: its best
+  defensible lower bound was 80.7%, and an earlier version *claimed* 90.8%
+  only because the threshold was fitted on the test split and that split's
+  accuracy was then quoted back — circular, since the fit maximises the
+  number being reported. It now fits on val, verifies on test, and judges the
+  worst domain rather than the average. See `ml/README.md`.
 
   ```bash
-  python -m ml.recalibrate backend/models/<version> --target 0.90 --policy conservative --write
+  python -m ml.recalibrate backend/models/<version> --target 0.90 --write
   python -m ml.bundle pack backend/models/<version> --version <version>   # hashes change
   ```
 
-  `--policy max-coverage` trades the other way: threshold 0.785, answering
-  ~39% at ~84% (CI 77.7–88.2). Exit status is 2 whenever the target is missed.
+  Exit status is 2 whenever the target is missed.
 
-- **`confidence` is this photo's score, not a success rate.** Showing it to a
-  user as "the model is 94% sure" overstates things badly — a ≤10% re-crop
-  changes the predicted class on 31% of field photos and swings confidence by
-  0.15 on average. `expected_accuracy` is the number that describes how often
-  an accepted prediction is actually right. `DiseaseClassifier(dir, tta=True)`
-  averages 3 zoom levels for steadier confidence at 3x cost and no accuracy
-  gain; it is off by default.
+- **`confidence` is this photo's score, not a success rate.** Showing it as
+  "the model is 94% sure" overstates things — a ≤10% re-crop still changes the
+  predicted class on ~31% of field photos. `expected_accuracy` is the number
+  describing how often an accepted prediction is actually right.
+  `DiseaseClassifier(dir, tta=True)` averages 3 zoom levels for steadier
+  confidence at 3x cost and no accuracy gain; it is off by default.
+
+- **Vertical's 98.8% is dominated by one capture session.** 9,979 of the
+  11,347 vertical images come from a single Roboflow greenhouse shoot. It does
+  generalise — a different NFT system scores 94.4% — but on only 36 held-out
+  images (CI 81.9–98.5). Treat vertical accuracy as measured in *one*
+  greenhouse until a second one is collected.
 - **Four requested crops have no training data at all**: kale, spinach,
   arugula, mint, cilantro, thyme, microgreens. Photos of those are forced
   into the nearest available class. See `ml/taxonomy.py::UNCOVERED_TARGETS`.

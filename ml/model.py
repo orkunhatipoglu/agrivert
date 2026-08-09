@@ -85,3 +85,65 @@ def load_checkpoint_into(model: nn.Module, path, map_location="cpu") -> nn.Modul
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)
     model.load_state_dict(unwrap_checkpoint(checkpoint))
     return model
+
+
+def _head_keys(state: dict) -> tuple[str, str] | None:
+    """The (weight, bias) keys of the final Linear, whatever the backbone."""
+    for w in ("classifier.1.weight", "classifier.3.weight"):
+        if w in state:
+            return w, w.replace("weight", "bias")
+    return None
+
+
+def warm_start_head(
+    model: nn.Module,
+    path,
+    old_classes: list[str],
+    new_classes: list[str],
+    map_location="cpu",
+) -> tuple[int, list[str]]:
+    """Load a checkpoint trained on `old_classes` into a model for `new_classes`.
+
+    The backbone transfers wholesale. The head cannot: it has one row per
+    class, so a taxonomy that gained a class has a differently shaped final
+    Linear and `load_state_dict` refuses it outright.
+
+    Rows are matched **by class name**, never by position. Matching by index
+    would appear to work and be quietly wrong the moment a class is inserted
+    anywhere but the end — every subsequent class would inherit another
+    class's learned weights, and the only symptom would be a model that
+    trains from a worse-than-random start for reasons nothing logs.
+
+    Classes with no counterpart in the checkpoint keep their fresh
+    initialisation. Returns (rows transferred, names of the new classes).
+    """
+    checkpoint = unwrap_checkpoint(
+        torch.load(path, map_location=map_location, weights_only=False)
+    )
+    keys = _head_keys(checkpoint)
+    target = model.state_dict()
+    if keys is None or _head_keys(target) != keys:
+        raise ValueError(
+            f"cannot locate a matching classifier head in {path}; "
+            "warm-starting across different architectures is not supported"
+        )
+    w_key, b_key = keys
+    old_w, old_b = checkpoint[w_key], checkpoint[b_key]
+    if old_w.shape[0] != len(old_classes):
+        raise ValueError(
+            f"{path} has a {old_w.shape[0]}-row head but was described as "
+            f"{len(old_classes)} classes — refusing to guess the alignment"
+        )
+
+    new_w, new_b = target[w_key].clone(), target[b_key].clone()
+    old_index = {name: i for i, name in enumerate(old_classes)}
+    transferred = 0
+    for i, name in enumerate(new_classes):
+        j = old_index.get(name)
+        if j is not None:
+            new_w[i], new_b[i] = old_w[j], old_b[j]
+            transferred += 1
+
+    checkpoint[w_key], checkpoint[b_key] = new_w, new_b
+    model.load_state_dict(checkpoint)
+    return transferred, [c for c in new_classes if c not in old_index]

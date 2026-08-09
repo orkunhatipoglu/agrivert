@@ -67,6 +67,11 @@ from ml.taxonomy import (
 
 log = logging.getLogger("train_vertical")
 
+# Base train/val/test ratios. Per-domain overrides (see --vertical-holdout)
+# adjust these for a single domain; everything else uses these. Named because
+# ml.recalibrate has to reproduce the identical split from metadata.
+SPLIT_FRACS = (0.8, 0.1, 0.1)
+
 # The deployment domain. Everything else is a proxy for it. Note that it is
 # not used alone for selection — see --selection-domains for why.
 SELECTION_DOMAIN = DOMAIN_VERTICAL
@@ -378,6 +383,18 @@ def main(argv=None) -> int:
         help="Use an already-downloaded source, e.g. --root plantwild=/data/pw",
     )
     ap.add_argument("--architecture", default="mobilenet_v2")
+    ap.add_argument(
+        "--init-from",
+        type=Path,
+        default=None,
+        metavar="ARTIFACTS_DIR",
+        help=(
+            "Fine-tune from a previous run's artifacts dir instead of ImageNet. "
+            "The backbone transfers whole; head rows are matched by class NAME, "
+            "so classes may be added or reordered safely. New classes start "
+            "fresh, removed classes are dropped with a warning."
+        ),
+    )
     ap.add_argument("--image-size", type=int, default=DEFAULT_CENTER_CROP)
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--workers", type=int, default=8)
@@ -535,7 +552,7 @@ def main(argv=None) -> int:
     vertical_holdout = args.vertical_holdout
     train_idx, val_idx, test_idx = stratified_split(
         samples,
-        (0.8, 0.1, 0.1),
+        SPLIT_FRACS,
         args.seed,
         domain_fracs={
             DOMAIN_VERTICAL: (
@@ -632,7 +649,38 @@ def main(argv=None) -> int:
     }
 
     num_classes = len(VERTICAL_CLASSES)
-    model = build_backbone(args.architecture, num_classes, pretrained=True).to(device)
+    model = build_backbone(
+        args.architecture, num_classes, pretrained=args.init_from is None
+    ).to(device)
+    if args.init_from:
+        from ml.model import warm_start_head
+
+        prior = json.loads((args.init_from / "metadata.json").read_text())
+        if prior.get("architecture") != args.architecture:
+            log.error(
+                "--init-from is a %s checkpoint but --architecture is %s",
+                prior.get("architecture"), args.architecture,
+            )
+            return 1
+        transferred, added = warm_start_head(
+            model,
+            args.init_from / "best.pt",
+            prior["classes"],
+            list(VERTICAL_CLASSES),
+            map_location=device,
+        )
+        log.info(
+            "warm-started from %s: backbone + %d/%d head rows carried over by "
+            "class name; %d new class(es) start fresh%s",
+            args.init_from, transferred, num_classes, len(added),
+            (": " + ", ".join(added)) if added else "",
+        )
+        dropped = [c for c in prior["classes"] if c not in set(VERTICAL_CLASSES)]
+        if dropped:
+            log.warning(
+                "%d class(es) in the prior model are gone from the taxonomy and "
+                "their weights are discarded: %s", len(dropped), ", ".join(dropped),
+            )
 
     def set_backbone_grad(enabled: bool):
         features = getattr(model, "features", None)
@@ -895,6 +943,21 @@ def main(argv=None) -> int:
         "metrics": metrics,
         "best_epoch": best_epoch,
         "training_config": {k: str(v) for k, v in vars(args).items()},
+        # Everything ml.recalibrate needs to rebuild THIS run's exact split.
+        # Without it, recalibrating means re-typing the source list and every
+        # split flag from memory; get one wrong and the threshold is fitted on
+        # a different split than the model was trained on, which produces a
+        # plausible number and no error at all.
+        "split_config": {
+            "sources": sorted(roots),
+            "roots": {name: str(path) for name, path in sorted(roots.items())},
+            "seed": args.seed,
+            "fracs": list(SPLIT_FRACS),
+            "vertical_holdout": args.vertical_holdout,
+            "dedup_threshold": args.dedup_threshold,
+            "no_dedup": bool(args.no_dedup),
+            "selection_domains": selection_domains,
+        },
         "sources": sorted(roots),
         "domain_totals": dict(Counter(s.domain for s in samples)),
         "caveat": (

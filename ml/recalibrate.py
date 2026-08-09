@@ -44,6 +44,49 @@ from ml.train_vertical import download_sources, evaluate, stratified_split
 log = logging.getLogger("recalibrate")
 
 
+def adopt_split_config(args, meta) -> None:
+    """Take the split settings from the model's own metadata.
+
+    The alternative is re-typing the source list and every split flag from
+    memory on each recalibration. That fails silently and expensively: a
+    missing source or a different seed produces a *different* held-out set,
+    the sweep runs happily on it, and the threshold that comes out was fitted
+    against data the model may well have trained on. Nothing errors, and the
+    resulting number looks entirely reasonable.
+
+    Explicit flags still win, so a deliberate experiment is still possible.
+    """
+    cfg = meta.get("split_config")
+    if not cfg:
+        log.warning(
+            "%s predates split_config; falling back to CLI defaults. Verify "
+            "--sources/--root/--seed match the training run, or the threshold "
+            "will be fitted on the wrong split.",
+            args.artifacts,
+        )
+        return
+    if not args.sources:
+        args.sources = ",".join(cfg["sources"])
+    if not args.root:
+        args.root = [f"{n}={p}" for n, p in cfg["roots"].items()]
+    for flag, key in (
+        ("seed", "seed"),
+        ("vertical_holdout", "vertical_holdout"),
+        ("dedup_threshold", "dedup_threshold"),
+    ):
+        if getattr(args, flag) is None:
+            setattr(args, flag, cfg[key])
+    if not args.no_dedup:
+        args.no_dedup = cfg["no_dedup"]
+    if not args.selection_domains:
+        args.selection_domains = ",".join(cfg["selection_domains"])
+    log.info(
+        "split config adopted from metadata: %d source(s), seed=%s, "
+        "vertical_holdout=%s, dedup_threshold=%s",
+        len(cfg["sources"]), args.seed, args.vertical_holdout, args.dedup_threshold,
+    )
+
+
 def build_splits(args):
     """Reproduce the training run's val and test splits.
 
@@ -96,6 +139,54 @@ def build_test_split(args):
     return samples, test_idx
 
 
+def per_domain_sweep(by_domain: dict, thresholds, min_accepted: int) -> list[dict]:
+    """Sweep each selection domain separately and judge by the WORST one.
+
+    A pooled sweep answers "how good is this gate on average over the held-out
+    set", which is the question you want only while the domains are comparably
+    sized. They are not. After the Roboflow import the pool is 84% vertical —
+    single-session greenhouse photos the model gets 99% right — and 16% field.
+    Pooled selective accuracy at threshold 0.30 reads 95.3%; field accuracy at
+    that same gate is 74.0%. The average hid the domain a grower's photo
+    actually resembles.
+
+    A threshold therefore qualifies only when EVERY selection domain clears
+    the bar on its own CI lower bound, with enough accepted images in each to
+    measure. The gate has to hold where it is weakest, not on average.
+
+    `by_domain` maps domain -> (probs, targets). Each returned row carries the
+    per-domain detail plus `worst_lower_bound`, the value selection uses.
+    """
+    per = {d: {r["threshold"]: r for r in fine_sweep(p, t, thresholds, min_accepted)}
+           for d, (p, t) in by_domain.items()}
+    rows = []
+    for t in thresholds:
+        key = round(float(t), 4)
+        doms = {d: per[d][key] for d in by_domain}
+        reliable = all(r["reliable"] for r in doms.values())
+        worst_lo = min(r["selective_accuracy_95ci"][0] for r in doms.values())
+        worst_dom = min(doms, key=lambda d: doms[d]["selective_accuracy_95ci"][0])
+        total = sum(r["n_accepted"] for r in doms.values())
+        seen = sum(round(r["n_accepted"] / r["coverage"]) if r["coverage"] else 0
+                   for r in doms.values())
+        rows.append({
+            "threshold": key,
+            "coverage": (total / seen) if seen else 0.0,
+            "n_accepted": total,
+            "reliable": reliable,
+            "worst_lower_bound": worst_lo,
+            "worst_domain": worst_dom,
+            "per_domain": {d: {
+                "coverage": r["coverage"],
+                "n_accepted": r["n_accepted"],
+                "selective_accuracy": r["selective_accuracy"],
+                "selective_accuracy_95ci": r["selective_accuracy_95ci"],
+                "reliable": r["reliable"],
+            } for d, r in doms.items()},
+        })
+    return rows
+
+
 def fine_sweep(probs, targets, thresholds, min_accepted: int):
     """(threshold, coverage, n, selective accuracy + 95% CI) at each threshold.
 
@@ -144,6 +235,18 @@ def main(argv=None) -> int:
         "a 99%% accuracy measured on 6 photos is not a measurement",
     )
     ap.add_argument(
+        "--gate-rule",
+        choices=("worst-domain", "pooled"),
+        default="worst-domain",
+        help=(
+            "worst-domain (default): a gate must clear --target in EVERY "
+            "selection domain on its own. pooled: judge the domains averaged "
+            "together — only meaningful while they are comparably sized, and "
+            "they are not (vertical outnumbers field ~5:1), so pooled lets an "
+            "easy domain carry a hard one."
+        ),
+    )
+    ap.add_argument(
         "--policy",
         choices=("max-coverage", "conservative"),
         default="max-coverage",
@@ -154,15 +257,15 @@ def main(argv=None) -> int:
             "highest accuracy, for when a wrong answer costs more than none."
         ),
     )
-    ap.add_argument("--selection-domains", default="vertical,field")
-    ap.add_argument(
-        "--sources",
-        default="plantvillage,plantdoc,plantwild,plantseg,lettuce_hydroponic",
-    )
+    # These all default to "take it from the model's metadata" rather than to
+    # a hardcoded value, so recalibrating cannot quietly use a split the model
+    # was never trained against. Pass them only to deviate on purpose.
+    ap.add_argument("--selection-domains", default=None)
+    ap.add_argument("--sources", default=None)
     ap.add_argument("--root", action="append", default=[], metavar="NAME=PATH")
-    ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--vertical-holdout", type=float, default=0.2)
-    ap.add_argument("--dedup-threshold", type=int, default=5)
+    ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--vertical-holdout", type=float, default=None)
+    ap.add_argument("--dedup-threshold", type=int, default=None)
     ap.add_argument("--no-dedup", action="store_true")
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--workers", type=int, default=8)
@@ -183,9 +286,15 @@ def main(argv=None) -> int:
     from ml.model import build_backbone, load_checkpoint_into
 
     meta = json.loads((args.artifacts / "metadata.json").read_text())
+    adopt_split_config(args, meta)
     image_size = meta["preprocessing"]["image_size"]
     temperature = meta["calibration"]["temperature"]
-    domains = [d for d in args.selection_domains.split(",") if d]
+    domains = [d for d in (args.selection_domains or "vertical,field").split(",") if d]
+    # Post-adoption fallbacks, for artifacts predating split_config.
+    args.seed = 42 if args.seed is None else args.seed
+    args.vertical_holdout = 0.2 if args.vertical_holdout is None else args.vertical_holdout
+    args.dedup_threshold = 5 if args.dedup_threshold is None else args.dedup_threshold
+    args.sources = args.sources or "plantvillage,plantdoc,plantwild,plantseg,lettuce_hydroponic"
 
     samples, val_idx, test_idx = build_splits(args)
     pooled_val = [i for i in val_idx if samples[i].domain in domains]
@@ -223,30 +332,63 @@ def main(argv=None) -> int:
         _, _, logits, targets = evaluate(model, loader, device, len(VERTICAL_CLASSES))
         return torch.softmax(logits / temperature, dim=1), targets
 
-    val_probs, val_targets = probs_for(pooled_val)
-    grid = np.arange(0.50, 0.996, 0.005)
-    rows = fine_sweep(val_probs, val_targets, grid, args.min_accepted)
+    grid = np.arange(0.30, 0.996, 0.005)
+    if args.gate_rule == "worst-domain":
+        by_domain = {}
+        for dom in domains:
+            idx = [i for i in val_idx if samples[i].domain == dom]
+            if not idx:
+                log.warning("no val images in domain %r — it cannot gate", dom)
+                continue
+            by_domain[dom] = probs_for(idx)
+        rows = per_domain_sweep(by_domain, grid, args.min_accepted)
+        score = lambda r: r["worst_lower_bound"]  # noqa: E731
+    else:
+        val_probs, val_targets = probs_for(pooled_val)
+        rows = fine_sweep(val_probs, val_targets, grid, args.min_accepted)
+        score = lambda r: r["selective_accuracy_95ci"][0]  # noqa: E731
 
     # A gate qualifies on the CI *lower bound*, never the point estimate —
     # judging on the point estimate is what let a threshold be picked because
     # it got lucky on a handful of photos.
     reliable = [r for r in rows if r["reliable"]]
-    usable = [r for r in reliable if r["selective_accuracy_95ci"][0] >= args.target]
+    usable = [r for r in reliable if score(r) >= args.target]
     meets_target = bool(usable)
 
-    print(f"\nFitted on val/{'+'.join(domains)}: {len(pooled_val)} images")
-    print(f"temperature {temperature:.4f} (unchanged)\n")
-    print(f"{'thresh':>7} {'coverage':>9} {'n':>5} {'accuracy':>9} {'95% CI':>15}")
-    print("-" * 50)
-    for r in rows:
-        if round(r["threshold"] * 1000) % 25:  # print every 0.025
-            continue
-        flag = "" if r["reliable"] else "  (too few)"
-        lo, hi = r["selective_accuracy_95ci"]
-        print(
-            f"{r['threshold']:>7.3f} {r['coverage']:>8.1%} {r['n_accepted']:>5} "
-            f"{r['selective_accuracy']:>8.1%} {lo:>7.1%}-{hi:<7.1%}{flag}"
-        )
+    print(f"\nFitted on val/{'+'.join(domains)}  (rule: {args.gate_rule})")
+    print(f"temperature {temperature:.4f} (unchanged)")
+    if args.gate_rule == "worst-domain":
+        counts = {d: sum(1 for i in val_idx if samples[i].domain == d) for d in domains}
+        print(f"val composition: {counts}")
+        print("selection uses the WORST domain's CI lower bound, not the pooled mean\n")
+        head = f"{'thresh':>7}" + "".join(f"{d[:9]:>26}" for d in domains) + f"{'worst LB':>10}"
+        print(head)
+        print("-" * len(head))
+        for r in rows:
+            if round(r["threshold"] * 1000) % 50:  # every 0.05
+                continue
+            cells = ""
+            for d in domains:
+                pd = r["per_domain"].get(d)
+                cells += (
+                    f"{pd['coverage']:>9.0%}/{pd['n_accepted']:<5}{pd['selective_accuracy']:>7.1%}"
+                    f"{'' if pd['reliable'] else '*':>5}"
+                ) if pd else f"{'-':>26}"
+            print(f"{r['threshold']:>7.3f}{cells}{score(r):>10.1%}")
+        print("  (columns are coverage/n and selective accuracy; * = too few to measure)")
+    else:
+        print()
+        print(f"{'thresh':>7} {'coverage':>9} {'n':>5} {'accuracy':>9} {'95% CI':>15}")
+        print("-" * 50)
+        for r in rows:
+            if round(r["threshold"] * 1000) % 25:
+                continue
+            flag = "" if r["reliable"] else "  (too few)"
+            lo, hi = r["selective_accuracy_95ci"]
+            print(
+                f"{r['threshold']:>7.3f} {r['coverage']:>8.1%} {r['n_accepted']:>5} "
+                f"{r['selective_accuracy']:>8.1%} {lo:>7.1%}-{hi:<7.1%}{flag}"
+            )
 
     if not reliable:
         print(
@@ -267,36 +409,63 @@ def main(argv=None) -> int:
     else:
         # Best *defensible* gate, not merely the most selective: picking the
         # highest threshold would just track --min-accepted.
-        chosen = max(reliable, key=lambda r: r["selective_accuracy_95ci"][0])
+        chosen = max(reliable, key=score)
 
     if not meets_target:
+        worst = (
+            f" (worst domain: {chosen['worst_domain']})"
+            if args.gate_rule == "worst-domain" else ""
+        )
         print(
             f"\n*** No threshold reaches {args.target:.0%} selective accuracy "
-            f"(95% CI lower bound) on >={args.min_accepted} val images.\n"
+            f"(95% CI lower bound) on >={args.min_accepted} val images "
+            f"in EVERY selection domain.\n"
             f"    Using {chosen['threshold']:.3f} ({args.policy}) at "
-            f"{chosen['selective_accuracy_95ci'][0]:.1%} lower bound "
-            f"({chosen['selective_accuracy']:.1%} point estimate).\n"
+            f"{score(chosen):.1%} lower bound{worst}.\n"
             f"    This model does not meet the declared bar — recording "
             f"meets_target=false. Do not quote {args.target:.0%} anywhere."
         )
 
-    # The honest number: the chosen gate measured on data it was NOT fitted on.
+    # The honest number: the chosen gate measured on data it was NOT fitted on,
+    # broken out per domain. A single pooled figure here would reintroduce
+    # exactly the averaging that hid field behind vertical.
     verified = None
+    verified_per_domain = {}
     if pooled_test:
         test_probs, test_targets = probs_for(pooled_test)
         verified = fine_sweep(
             test_probs, test_targets, [chosen["threshold"]], args.min_accepted
         )[0]
+        for dom in domains:
+            idx = [i for i in test_idx if samples[i].domain == dom]
+            if not idx:
+                continue
+            p, t = probs_for(idx)
+            verified_per_domain[dom] = fine_sweep(
+                p, t, [chosen["threshold"]], args.min_accepted
+            )[0]
+
+        print(f"\nchosen {chosen['threshold']:.3f}  — VERIFIED on test (never fitted on)")
+        print(f"{'domain':<12} {'coverage':>9} {'n':>6} {'accuracy':>9} {'95% CI':>16}")
+        print("-" * 56)
+        for dom, r in verified_per_domain.items():
+            lo, hi = r["selective_accuracy_95ci"]
+            print(f"{dom:<12} {r['coverage']:>8.1%} {r['n_accepted']:>6} "
+                  f"{r['selective_accuracy']:>8.1%} {lo:>7.1%}-{hi:<7.1%}")
         lo, hi = verified["selective_accuracy_95ci"]
-        print(
-            f"\nchosen {chosen['threshold']:.3f}\n"
-            f"  fitted   on val : coverage {chosen['coverage']:.1%} "
-            f"(n={chosen['n_accepted']}) accuracy {chosen['selective_accuracy']:.1%}\n"
-            f"  VERIFIED on test: coverage {verified['coverage']:.1%} "
-            f"(n={verified['n_accepted']}) accuracy "
-            f"{verified['selective_accuracy']:.1%} (95% CI {lo:.1%}-{hi:.1%})  "
-            f"<- quote this one"
-        )
+        print(f"{'pooled':<12} {verified['coverage']:>8.1%} {verified['n_accepted']:>6} "
+              f"{verified['selective_accuracy']:>8.1%} {lo:>7.1%}-{hi:<7.1%}")
+        if verified_per_domain:
+            w = min(verified_per_domain,
+                    key=lambda d: verified_per_domain[d]["selective_accuracy"])
+            print(
+                f"\nQuote the per-domain rows, not 'pooled': the pool is "
+                f"{max((verified_per_domain[d]['n_accepted'] for d in verified_per_domain))} "
+                f"vs {min((verified_per_domain[d]['n_accepted'] for d in verified_per_domain))} "
+                f"images across domains, so its mean is dominated by the larger one. "
+                f"A {w} photo accepted at this gate is right "
+                f"{verified_per_domain[w]['selective_accuracy']:.1%} of the time."
+            )
     else:
         print(f"\nchosen {chosen['threshold']:.3f} (no test split to verify against)")
 
@@ -308,6 +477,8 @@ def main(argv=None) -> int:
         cal["threshold_fitted_on"] = f"val/{'+'.join(domains)}"
         cal["threshold_verified_on"] = f"test/{'+'.join(domains)}"
         cal["verified"] = verified
+        cal["verified_per_domain"] = verified_per_domain
+        cal["gate_rule"] = args.gate_rule
         cal["meets_target"] = meets_target
         cal["min_accepted"] = args.min_accepted
         cal["target_selective_accuracy"] = args.target

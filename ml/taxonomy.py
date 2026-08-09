@@ -59,6 +59,12 @@ VERTICAL_CLASSES: tuple[str, ...] = (
     "Lettuce___Mosaic_virus",
     "Lettuce___Nitrogen_deficiency",
     "Lettuce___Potassium_deficiency",
+    # Sclerotinia (lettuce drop) — from the Roboflow greenhouse set, the only
+    # source that has it. Kept next to the other lettuce classes rather than
+    # appended at the end: checkpoints are warm-started by class *name*
+    # (see load_checkpoint_into), so this tuple's order is free to stay
+    # readable and does not have to preserve historical indices.
+    "Lettuce___Sclerotinia_rot",
     "Lettuce___Wilt",
     # Basil — disease only; no healthy basil exists in any source.
     "Basil___Downy_mildew",
@@ -189,6 +195,44 @@ LETTUCE_GREENHOUSE_MAP: dict[str, str] = {
     "healthy": "Lettuce___healthy",
 }
 
+# Roboflow `phs/lettuce_disease` (MIT), exported as multiclass. The export is
+# one-hot over five columns, but only three of them are health states:
+# `growing` and `raising_seeding` are GROWTH STAGES that co-occur with
+# `health`, not conditions of their own. Mapping them as labels would teach
+# the model to answer "seedling" when asked what is wrong with a plant.
+#
+# The combinations are clean and mutually exclusive in practice — no image
+# carries both diseases, and no diseased image is also marked healthy:
+#   growing+health            5803  -> healthy
+#   health+raising_seeding    1914  -> healthy
+#   sclerotinia_rot           1184  -> Sclerotinia
+#   downy_mildew              1078  -> Downy mildew
+LETTUCE_ROBOFLOW_MAP: dict[str, str] = {
+    "sclerotinia_rot": "Lettuce___Sclerotinia_rot",
+    "downy_mildew": "Lettuce___Downy_mildew",
+    "health": "Lettuce___healthy",
+}
+
+# Growth stages, deliberately not labels. Listed so the adapter can tell
+# "column I chose to ignore" apart from "column I have never seen".
+LETTUCE_ROBOFLOW_STAGES: frozenset[str] = frozenset({"growing", "raising_seeding"})
+
+# ashishjstar/lettuce-diseases. Read the counts before trusting this source:
+# of ~2337 images, 1123 are Healthy and 1106 are a *weed* (Shepherd's purse,
+# not a lettuce condition at all). The five disease folders hold 6-30 images
+# each, which is too few to learn and more than enough to produce confident
+# nonsense, so only the classes that already exist elsewhere are mapped.
+#
+# Deliberately unmapped: Bacterial (20), Powdery_mildew (18),
+# Septoria_blight (19) — no corresponding class exists and 20 images cannot
+# create one; Shepherd_purse_weeds (1106) — a weed, and the images are 119x119
+# thumbnails.
+LETTUCE_KAGGLE_MAP: dict[str, str] = {
+    "Healthy": "Lettuce___healthy",
+    "Downy_mildew_on_lettuce": "Lettuce___Downy_mildew",
+    "Wilt_and_leaf_blight_on_lettuce": "Lettuce___Wilt",
+}
+
 CLASS_INDEX: dict[str, int] = {c: i for i, c in enumerate(VERTICAL_CLASSES)}
 
 
@@ -218,6 +262,8 @@ def validate_taxonomy() -> None:
         ("PLANTWILD_MAP", PLANTWILD_MAP),
         ("LETTUCE_HYDRO_MAP", LETTUCE_HYDRO_MAP),
         ("LETTUCE_GREENHOUSE_MAP", LETTUCE_GREENHOUSE_MAP),
+        ("LETTUCE_ROBOFLOW_MAP", LETTUCE_ROBOFLOW_MAP),
+        ("LETTUCE_KAGGLE_MAP", LETTUCE_KAGGLE_MAP),
     ):
         for source_label, canonical in mapping.items():
             if canonical not in known:
@@ -234,6 +280,8 @@ def validate_taxonomy() -> None:
             PLANTWILD_MAP,
             LETTUCE_HYDRO_MAP,
             LETTUCE_GREENHOUSE_MAP,
+            LETTUCE_ROBOFLOW_MAP,
+            LETTUCE_KAGGLE_MAP,
         )
         for c in mapping.values()
     }

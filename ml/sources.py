@@ -20,6 +20,7 @@ pipeline targeted `field`: the domain you validate on is the domain you get.
 
 from __future__ import annotations
 
+import csv
 import logging
 import re
 import zipfile
@@ -29,6 +30,9 @@ from pathlib import Path
 from ml.taxonomy import (
     LETTUCE_GREENHOUSE_MAP,
     LETTUCE_HYDRO_MAP,
+    LETTUCE_KAGGLE_MAP,
+    LETTUCE_ROBOFLOW_MAP,
+    LETTUCE_ROBOFLOW_STAGES,
     PLANTDOC_MAP,
     PLANTVILLAGE_MAP,
     PLANTWILD_MAP,
@@ -221,6 +225,69 @@ def load_lettuce_greenhouse(root: Path) -> list[Sample]:
     return samples
 
 
+def load_lettuce_roboflow(root: Path) -> list[Sample]:
+    """Roboflow `phs/lettuce_disease`, multiclass export.
+
+    Layout is `<split>/_classes.csv` plus the images beside it. The CSV is
+    one-hot over five columns, two of which (`growing`, `raising_seeding`) are
+    growth stages rather than health states — see LETTUCE_ROBOFLOW_MAP.
+
+    Disease wins over `health` when both are set. That never happens in this
+    export, but the rule is written down rather than assumed: a future
+    re-export that does mark a diseased plant as partially healthy must not
+    silently start labelling diseased lettuce as healthy.
+
+    Roboflow's own train/valid/test split is ignored on purpose. Splitting is
+    this project's job (group-aware, see ml.dedup) and mixing two split
+    schemes is how images end up on both sides.
+    """
+    samples: list[Sample] = []
+    for split_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        csv_path = split_dir / "_classes.csv"
+        if not csv_path.is_file():
+            continue
+        with csv_path.open(newline="") as fh:
+            for row in csv.DictReader(fh):
+                filename = row.get("filename")
+                if not filename:
+                    continue
+                # Roboflow pads the header with spaces: " health", " growing".
+                on = {k.strip() for k, v in row.items()
+                      if k != "filename" and (v or "").strip() == "1"}
+                labels = [LETTUCE_ROBOFLOW_MAP[c] for c in on
+                          if c in LETTUCE_ROBOFLOW_MAP]
+                diseases = [c for c in labels if not c.endswith("healthy")]
+                canonical = diseases[0] if diseases else (labels[0] if labels else None)
+                unknown = on - set(LETTUCE_ROBOFLOW_MAP) - LETTUCE_ROBOFLOW_STAGES
+                if unknown:
+                    log.warning(
+                        "lettuce_roboflow: unrecognised column(s) %s in %s — "
+                        "the export schema changed; check the mapping",
+                        sorted(unknown), csv_path,
+                    )
+                if canonical is None:
+                    continue
+                image = split_dir / filename
+                if image.is_file():
+                    samples.append(
+                        Sample(image, canonical, DOMAIN_VERTICAL, "lettuce_roboflow")
+                    )
+    return samples
+
+
+def load_lettuce_kaggle(root: Path) -> list[Sample]:
+    """ashishjstar/lettuce-diseases: `Lettuce_disease_datasets/<Class>/`.
+
+    Most of this dataset is unusable — see LETTUCE_KAGGLE_MAP. Only the three
+    folders that map onto classes we already have are loaded; the rest are
+    6-30 images each, or a weed.
+    """
+    base = _find_dir(root, "Lettuce_disease_datasets") or root
+    return _by_class_folder(
+        base, LETTUCE_KAGGLE_MAP, DOMAIN_VERTICAL, "lettuce_kaggle"
+    )
+
+
 LOADERS = {
     "plantvillage": load_plantvillage,
     "plantdoc": load_plantdoc,
@@ -229,6 +296,8 @@ LOADERS = {
     "plantseg": load_plantseg,
     "lettuce_hydroponic": load_lettuce_hydroponic,
     "lettuce_greenhouse": load_lettuce_greenhouse,
+    "lettuce_roboflow": load_lettuce_roboflow,
+    "lettuce_kaggle": load_lettuce_kaggle,
 }
 
 # kagglehub slugs / HF repo, so the training script can fetch what's missing.
@@ -239,7 +308,12 @@ SOURCE_REFS = {
     "plantseg": ("kaggle", "weitianqi/plantseg"),
     "lettuce_hydroponic": ("kaggle", "rathorhome/lettuce-disease"),
     "lettuce_greenhouse": ("kaggle", "wingsdong/lettuce-diseases-and-pests"),
+    "lettuce_kaggle": ("kaggle", "ashishjstar/lettuce-diseases"),
     "plantwild": ("hf", "uqtwei2/PlantWild"),
+    # lettuce_roboflow has no auto-download: it comes from a Roboflow version
+    # export, which has to be generated in a workspace before it exists. Pass
+    # --root lettuce_roboflow=<dir> pointing at the unzipped export. See
+    # ml/README.md for how to regenerate it.
 }
 
 # Sources that arrive as archives rather than as a directory tree. HuggingFace

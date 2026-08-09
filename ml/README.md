@@ -11,9 +11,9 @@ just download the result:
 
 ```bash
 python -m ml.bundle fetch \
-  https://github.com/orkunhatipoglu/agrivert/releases/download/v2-vertical-20260809/v2-vertical-20260809.tar.gz \
+  https://github.com/orkunhatipoglu/agrivert/releases/download/v3-vertical-20260809/v3-vertical-20260809.tar.gz \
   --into backend/models \
-  --sha256 3faba3371886d2d7124337613f0d3aec3e7b7270f71be256e61b1f8fcde78def
+  --sha256 17d5d2b48d0a9cedfc77bca7c4090d3f703ed385d33a561a929dd2d1399e52dc
 ```
 
 That is the whole install. No GPU, no Kaggle account, no dataset downloads.
@@ -30,20 +30,18 @@ mixing a new URL with an old hash — `bundle fetch` will refuse the mismatch.
 
 | | |
 |---|---|
-| Tag | `v2-vertical-20260809` |
-| Size | 8.6 MB |
-| Classes | 30 |
-| Accuracy | studio 96.8% / field 54.4% / vertical 95.1% |
-| Confidence threshold | 0.955 — answers 14.8% of photos at 95.8% (95% CI 88.5–98.6) |
-| Meets its 90% bar | **No.** See "The threshold does not meet the declared bar" below |
-| sha256 | `3faba3371886d2d7124337613f0d3aec3e7b7270f71be256e61b1f8fcde78def` |
+| Tag | `v3-vertical-20260809` |
+| Classes | 31 (adds `Lettuce___Sclerotinia_rot`) |
+| Accuracy | studio 99.0% / **field 62.2%** / vertical 98.8% |
+| Confidence threshold | 0.910 — field 54.4% answered at 91.4%; vertical 96.0% at 99.8% |
+| Meets its 90% bar | **Yes**, under the strict worst-domain rule |
 
 Releases: <https://github.com/orkunhatipoglu/agrivert/releases>
 
 ### Publishing a bundle after training
 
 ```bash
-python -m ml.bundle pack artifacts/vertical --version v2-vertical-20260809
+python -m ml.bundle pack artifacts/vertical-v3 --version v3-vertical-20260809
 ```
 
 That writes three files to `dist/` — `.tar.gz`, `.tar.gz.sha256` and
@@ -52,9 +50,9 @@ version string, so the download URL above resolves. Then update the hash in
 this file and in `backend/README.md`.
 
 ```bash
-gh release create v2-vertical-20260809 dist/v2-vertical-20260809.* \
-  --title "Vertical-ag model v2" \
-  --notes "30 classes. studio 96.8% / field 54.4% / vertical 95.1% (n=41). Threshold 0.955."
+gh release create v3-vertical-20260809 dist/v3-vertical-20260809.* \
+  --title "Vertical-ag model v3" \
+  --notes "31 classes. studio 99.0% / field 62.2% / vertical 98.8%. Gate 0.910: field 91.4% on 54.4% coverage."
 ```
 
 Without `gh` installed, the same thing via
@@ -113,13 +111,76 @@ reported success.
 
 | Flag | Default | Why you would touch it |
 |---|---|---|
-| `--vertical-boost` | 12.0 | Oversampling of the vertical domain. At 12 it takes ~65% of every epoch from 126 images (~111 repeats each) to serve 4 of 30 classes. **4.0 (~38%) is the tested setting.** |
+| `--vertical-boost` | 12.0 | Oversampling of the vertical domain. Sized for when vertical was 209 images; it now has 11,347, so **2.0 (~32% of each epoch) is the tested v3 setting**. At 12 it would swamp field entirely. |
 | `--selection-domains` | `vertical,field` | Domains whose mean macro-F1 picks the checkpoint and fits calibration. |
 | `--vertical-holdout` | 0.2 | Vertical uses 60/20/20; studio and field use 80/10/10. |
 | `--no-dedup` | off | Split per image instead of per subject. Diagnostic only — it inflates every vertical number. |
 | `--dedup-threshold` | 5 | dHash Hamming distance (of 64) counted as the same subject. |
-| `--target-selective-accuracy` | 0.90 | Accuracy the recommended threshold must reach on accepted predictions — judged on the 95% CI **lower bound**, fitted on val, verified on test. This model does not reach it; see below. |
+| `--target-selective-accuracy` | 0.90 | Accuracy the recommended threshold must reach on accepted predictions — judged on the 95% CI **lower bound**, fitted on val, verified on test. Judged per domain, not pooled — see below. |
 | `--min-accepted` | 40 | Ignore gates accepting fewer val images than this. 100% accuracy on 6 photos is not a measurement. |
+
+### Fine-tuning onto an expanded taxonomy
+
+```bash
+python -m ml.train_vertical --download --init-from artifacts/vertical \
+  --out-dir artifacts/vertical-v3 \
+  --sources plantvillage,plantdoc,plantwild,plantseg,lettuce_hydroponic,lettuce_kaggle,lettuce_roboflow \
+  --root lettuce_roboflow=~/.cache/agrivert/lettuce_roboflow/extracted \
+  --vertical-boost 2.0
+```
+
+`--init-from` carries the backbone over whole and matches head rows **by
+class name**. Matching by position is the trap: insert a class anywhere but
+the end and every later class silently inherits its neighbour's weights.
+Nothing errors, loss still falls, and the model just starts from a worse
+place than it should. Adding `Lettuce___Sclerotinia_rot` in the middle of the
+lettuce block moved 25 of 30 classes by one index — all 25 kept their own
+weights, and `backend/tests/test_finetune.py` fails if that ever regresses.
+
+Classes present in the checkpoint but gone from the taxonomy are dropped with
+a warning; classes new to the taxonomy start fresh.
+
+### Sources, and which ones are worth their download
+
+| Source | Domain | Images | Verdict |
+|---|---|---|---|
+| `plantvillage` | studio | 22,200 | Core studio set |
+| `plantdoc` / `plantwild` / `plantseg` | field | 4,521 | The honest domain |
+| `lettuce_hydroponic` | vertical | 209 | Only true vertical-farm source |
+| `lettuce_roboflow` | vertical | 9,979 | **The one that mattered** |
+| `lettuce_kaggle` | vertical | 1,159 of 2,337 | Partly usable |
+| ~~`plant-disease-expert`~~ | — | 200,506 | **Rejected — see below** |
+
+`lettuce_roboflow` (Roboflow `phs/lettuce_disease`, MIT) took the vertical
+domain from 209 images to 11,347 and added `Lettuce___Sclerotinia_rot`. It
+has no auto-download: a Roboflow *version* has to be generated before an
+export exists, so pass `--root lettuce_roboflow=<unzipped export>`. Generate
+it with 640px "Fit within" and **no augmentation** — augmentation belongs in
+training, and a stretched resize would feed distorted aspect ratios into a
+pipeline that centre-crops. The export's `growing` and `raising_seeding`
+columns are growth stages that co-occur with `health`, not conditions; see
+`LETTUCE_ROBOFLOW_MAP`.
+
+Read the counts before trusting a dataset's description:
+
+* **`ashishjstar/lettuce-diseases`** advertises 8 lettuce disease classes in
+  1.25GB. 1,123 images are Healthy and 1,106 are *Shepherd's purse*, a weed,
+  shipped as 119x119 thumbnails. The five disease folders hold 6-30 images
+  each. Only the three folders mapping onto classes we already have are
+  loaded; a class built from 6 images cannot be learned but is more than
+  enough to produce confident nonsense.
+* **`sadmansakibmahi/plant-disease-expert`** is 10.6GB and 200,506 images,
+  and it is PlantVillage re-augmented. Every class is an exact multiple of
+  its PlantVillage counterpart — 6048/630 and 11328/1180 are both 9.6x,
+  5727/1909 and 3000/1000 are both 3.0x. Independent collection does not
+  produce exact integer ratios against another dataset. Adding it would pour
+  200k more studio images into the domain that is already at 96.8% and
+  already over-represented, while doing nothing for field or vertical. Its
+  genuinely novel content is thin: N deficiency (33), K deficiency (54),
+  waterlogging (21), cabbage looper (234), plus tea/rice/garlic crops outside
+  this taxonomy. The deficiency folders are *generic plants*, not lettuce, so
+  mapping them onto the lettuce deficiency classes would corrupt two of the
+  four classes the vertical product actually depends on.
 
 ### Domains
 
@@ -159,49 +220,61 @@ Report the leakage in any dataset directly:
 python -m ml.dedup /path/to/dataset --threshold 5
 ```
 
-### The threshold does not meet the declared bar
+### How the confidence gate is chosen
 
-`--target-selective-accuracy` is 0.90. **No threshold reaches it.** The best
-any gate can defend on validation data is a 80.7% lower bound. `metadata.json`
-records `meets_target: false`, `predict.py` returns it on every diagnosis, and
-nothing in this project may advertise 90%.
+Three rules, each added after the previous version of this shipped a number
+that was flattering rather than true. All three are enforced by
+`backend/tests/test_calibration.py`.
 
-This was hidden by a calibration bug worth understanding, because the shape of
-it recurs. The threshold was **fitted on the test split**, and that same
-split's selective accuracy was then reported as the expected quality. The
-report could not fail: the number being quoted was exactly the quantity the
-fit maximised. Measured properly, the shipped 0.91 gate looked like this:
+**1. Fit on val, verify on test.** The threshold used to be fitted on the
+*test* split, and that split's selective accuracy then reported as the
+expected quality. The report could not fail — the number quoted was exactly
+what the fit maximised. The v2 gate measured properly:
 
-| | coverage | selective accuracy |
+| 0.91 gate (v2) | coverage | selective accuracy |
 |---|---|---|
 | test split (where it was fitted) | 22.3% | **90.8%** ← the claim |
 | val split (never seen by the fit) | 17.7% | **86.4%** ← reality |
 
-Two rules now prevent it, both enforced by `backend/tests/test_calibration.py`:
+**2. Judge by the CI lower bound, not the point estimate.** With ~90 accepted
+images a measured 91% reaches below 83%, so selecting on the point estimate
+picks whichever threshold got lucky. `--min-accepted` (default 40) discards
+gates too small to measure at all — 100% on 6 photos is not a measurement.
 
-* **Fit on val, verify on test.** `metadata.json` carries `threshold_fitted_on`
-  and `threshold_verified_on`, and `calibration.verified` holds the only
-  selective-accuracy figure that is a measurement rather than a fitted
-  quantity. Quote that one.
-* **Judge a gate by the lower bound of its 95% CI, not the point estimate.**
-  With ~90 accepted images a measured 91% reaches below 83%; selecting on the
-  point estimate picks whichever threshold got lucky, and luck does not
-  survive new photos. `--min-accepted` (default 40) additionally discards
-  gates too small to measure at all — 100% on 6 photos is not a measurement.
+**3. Judge the worst domain, not the average** (`--gate-rule worst-domain`,
+the default). This one is new in v3 and it matters most. Pooling vertical and
+field was sound while vertical was 41 images against field's 447. Importing
+9,979 Roboflow images inverted that: the pool became 84% vertical, and
+vertical is easy. At threshold 0.30 the pooled figure read **95.3%** while a
+field photo accepted at that same gate was right **74.0%** of the time. The
+average was hiding the domain a grower's photo actually resembles. A gate now
+qualifies only if *every* selection domain clears the target on its own.
 
-The shipped gate uses `--policy conservative`: the most selective threshold
-still measurable, chosen because a confident wrong answer to a grower costs
-more than an honest "I can't tell". It answers **14.8%** of photos at **95.8%**
-(95% CI 88.5–98.6, n=72 verified on test). Most photos return `uncertain`.
-That is the intended behaviour.
+The v3 gate is **0.910**, and this is the first version to **meet** the 90%
+bar (v2 could not reach it at all — its best defensible lower bound was
+80.7%). Verified on test, never fitted on:
+
+| domain | coverage | n | selective accuracy |
+|---|---|---|---|
+| vertical | 96.0% | 2,177 | 99.8% (99.5–99.9) |
+| **field** | 54.4% | 243 | **91.4%** (87.2–94.3) |
+| ~~pooled~~ | 89.1% | 2,420 | ~~98.9%~~ — do not quote |
+
+`metadata.json` carries `verified_per_domain` for exactly this reason. Quote
+the per-domain rows; the pooled mean is 2,177 images against 243 and tells
+you about the larger one.
 
 ```bash
-python -m ml.recalibrate artifacts/vertical --target 0.90 --policy conservative --write
-python -m ml.recalibrate artifacts/vertical --target 0.80                        # what 80% would buy
+python -m ml.recalibrate artifacts/vertical-v3 --target 0.90 --write
+python -m ml.recalibrate artifacts/vertical-v3 --gate-rule pooled   # the old, flattering view
 ```
 
-Exit status is 2 when the target is missed, so CI can catch a regression that
-would otherwise only show up as a slightly nicer-looking number.
+Recalibration reads `split_config` from the model's own metadata, so it
+rebuilds the exact split the run trained against. Passing the source list by
+hand is how a threshold ends up fitted on data the model trained on — it
+produces a plausible number and no error. Exit status is 2 when the target is
+missed, so CI catches a regression that would otherwise surface only as a
+slightly nicer-looking number.
 
 ### Why confidence moves when you re-crop a photo
 
@@ -218,6 +291,13 @@ Two causes, and the first is not a bug so much as a consequence:
 2. **The model is ~55% accurate on field photos.** Near the decision boundary
    a small input change flips the argmax. This dominates, and no preprocessing
    change fixes it — only a better model does.
+
+The v3 data helped this partially and honestly not completely: class flips
+under a ≤10% crop fell from **40.0% to 30.8%**, but the confidence *swings*
+grew slightly (p95 0.296 → 0.391), because v3's temperature is 0.715 rather
+than 0.98 and a sharper distribution moves further. The gate is what actually
+protects a grower here: at 0.910 only 54.4% of field photos are answered at
+all, and those are 91.4% correct.
 
 `build_tta_transforms` averages three zoom levels and cuts flips to ~20% and
 the mean swing to ~0.11. It is **off by default** and worth being precise
